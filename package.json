@@ -5,10 +5,13 @@
   "type": "module",
   "description": "OpenSpec review suite with CLI + web read-only workbench",
   "bin": {
+    "spec-readr": "./src/cli.js",
+    "specreadr": "./src/cli.js",
     "readr": "./src/cli.js"
   },
   "scripts": {
-    "start": "node ./src/cli.js serve",
+    "start": "node ./src/cli.js web",
+    "web": "node ./src/cli.js web",
     "verify": "node ./scripts/verify.js"
   }
 }

@@ -4,6 +4,7 @@ import http from "node:http";
 import { URL, fileURLToPath } from "node:url";
 import { addWorkspace, loadRegistry, removeWorkspace, saveRegistry } from "./registry.js";
 import { buildIndex, saveIndexCache, loadIndexCache } from "./indexer.js";
+import { clearRuntimeIfOwned, saveRuntime } from "./runtime.js";
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -202,7 +203,16 @@ export async function createWorkbenchServer(opts = {}) {
     async listen(port = 4173) {
       await new Promise((resolve) => server.listen(port, resolve));
       const addr = server.address();
-      return typeof addr === "object" && addr ? addr.port : port;
+      const realPort = typeof addr === "object" && addr ? addr.port : port;
+      await saveRuntime(
+        {
+          pid: process.pid,
+          port: realPort,
+          startedAt: new Date().toISOString(),
+        },
+        { dataDir: registry.dataDir }
+      );
+      return realPort;
     },
     async close() {
       await new Promise((resolve, reject) => {
@@ -223,6 +233,24 @@ export async function createWorkbenchServer(opts = {}) {
     },
     async saveRegistry() {
       await saveRegistry(registry);
+    },
+    async registerShutdownHooks() {
+      const shutdown = async (code = 0) => {
+        try {
+          await clearRuntimeIfOwned(process.pid, { dataDir: registry.dataDir });
+          await new Promise((resolve) => {
+            server.close(() => resolve());
+          });
+        } finally {
+          process.exit(code);
+        }
+      };
+      process.once("SIGINT", () => {
+        shutdown(0);
+      });
+      process.once("SIGTERM", () => {
+        shutdown(0);
+      });
     },
   };
 }

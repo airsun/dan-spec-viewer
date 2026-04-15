@@ -2,3 +2,4 @@
 node_modules/
 .tmp-verify-data/
 .dan-spec-readr/
+.spec-readr/
