@@ -1,0 +1,14 @@
+{
+  "name": "dan-spec-readr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenSpec review suite with CLI + web read-only workbench",
+  "bin": {
+    "readr": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node ./src/cli.js serve",
+    "verify": "node ./scripts/verify.js"
+  }
+}

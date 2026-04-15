@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dan Spec Readr</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Dan Spec Readr</h1>
+        <p>OpenSpec review suite (read-only)</p>
+      </div>
+      <div class="top-actions">
+        <button id="refreshAllBtn">Refresh Index</button>
+      </div>
+    </header>
+
+    <section class="workspace-bar">
+      <label for="workspaceSelect">Workspace:</label>
+      <select id="workspaceSelect"></select>
+      <button id="removeWorkspaceBtn">Unbind Workspace</button>
+      <input id="addWorkspacePath" placeholder="/path/to/workspace" />
+      <input id="addWorkspaceLabel" placeholder="label (optional)" />
+      <button id="addWorkspaceBtn">Bind Workspace</button>
+      <span id="scanMeta"></span>
+    </section>
+
+    <main class="layout">
+      <aside class="panel nav-panel">
+        <div class="panel-head">
+          <h2>Navigation</h2>
+          <div class="segmented">
+            <button id="modeCardsBtn" class="active">Spec Cards</button>
+            <button id="modeFilesBtn">File Browser</button>
+          </div>
+        </div>
+        <div id="navContent" class="panel-content"></div>
+      </aside>
+
+      <section class="panel reader-panel">
+        <div class="panel-head">
+          <h2>Review Reader</h2>
+          <div class="segmented">
+            <button id="viewStoryBtn" class="active">Story</button>
+            <button id="viewCompareBtn">Compare</button>
+          </div>
+        </div>
+        <div id="readerContent" class="panel-content"></div>
+      </section>
+
+      <aside class="panel lens-panel">
+        <div class="panel-head">
+          <h2>Capability Lens</h2>
+        </div>
+        <div id="lensContent" class="panel-content"></div>
+      </aside>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
