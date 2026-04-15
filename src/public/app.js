@@ -1,5 +1,6 @@
 const state = {
   index: null,
+  runtime: null,
   selectedWorkspaceId: null,
   navMode: "cards",
   readerMode: "story",
@@ -13,11 +14,14 @@ const state = {
 const els = {
   workspaceSelect: document.getElementById("workspaceSelect"),
   removeWorkspaceBtn: document.getElementById("removeWorkspaceBtn"),
+  clearWorkspacesBtn: document.getElementById("clearWorkspacesBtn"),
+  stopServiceBtn: document.getElementById("stopServiceBtn"),
   addWorkspacePath: document.getElementById("addWorkspacePath"),
   addWorkspaceLabel: document.getElementById("addWorkspaceLabel"),
   addWorkspaceBtn: document.getElementById("addWorkspaceBtn"),
   refreshAllBtn: document.getElementById("refreshAllBtn"),
   scanMeta: document.getElementById("scanMeta"),
+  runtimeMeta: document.getElementById("runtimeMeta"),
   modeCardsBtn: document.getElementById("modeCardsBtn"),
   modeFilesBtn: document.getElementById("modeFilesBtn"),
   viewStoryBtn: document.getElementById("viewStoryBtn"),
@@ -196,6 +200,13 @@ function renderWorkspaceBar() {
   }
 
   els.scanMeta.textContent = state.index?.generatedAt ? `Last index: ${state.index.generatedAt}` : "";
+  if (!state.runtime?.runtime) {
+    els.runtimeMeta.textContent = "Service: stopped";
+  } else if (state.runtime.running) {
+    els.runtimeMeta.textContent = `Service: running on :${state.runtime.runtime.port}`;
+  } else {
+    els.runtimeMeta.textContent = `Service: stale runtime (pid=${state.runtime.runtime.pid})`;
+  }
 }
 
 function renderNavigation() {
@@ -482,7 +493,9 @@ async function refreshIndex(workspaceId = null) {
 }
 
 async function loadIndex() {
-  state.index = await api("/api/index");
+  const [indexData, runtimeData] = await Promise.all([api("/api/index"), api("/api/runtime/status")]);
+  state.index = indexData;
+  state.runtime = runtimeData;
   await rerender();
 }
 
@@ -527,6 +540,21 @@ function bindStaticEvents() {
     state.selectedChangeId = null;
     state.selectedArtifactPath = null;
     await loadIndex();
+  });
+
+  els.clearWorkspacesBtn.addEventListener("click", async () => {
+    if (!confirm("Clear all linked workspaces?")) return;
+    await api("/api/workspaces", { method: "DELETE" });
+    state.selectedWorkspaceId = null;
+    state.selectedChangeId = null;
+    state.selectedArtifactPath = null;
+    await loadIndex();
+  });
+
+  els.stopServiceBtn.addEventListener("click", async () => {
+    if (!confirm("Stop spec-readr web service now?")) return;
+    await api("/api/runtime/stop", { method: "POST", body: JSON.stringify({}) });
+    els.runtimeMeta.textContent = "Service: stopping...";
   });
 
   els.addWorkspaceBtn.addEventListener("click", async () => {

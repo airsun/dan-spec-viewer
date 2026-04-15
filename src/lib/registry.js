@@ -81,3 +81,11 @@ export async function listWorkspaces(opts = {}) {
   const registry = await loadRegistry(opts);
   return registry.workspaces;
 }
+
+export async function clearWorkspaces(opts = {}) {
+  const registry = await loadRegistry(opts);
+  const removedCount = registry.workspaces.length;
+  registry.workspaces = [];
+  await saveRegistry(registry);
+  return { registry, removedCount };
+}

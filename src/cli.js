@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { addWorkspace, listWorkspaces, loadRegistry, removeWorkspace } from "./lib/registry.js";
+import { addWorkspace, clearWorkspaces, listWorkspaces, loadRegistry, removeWorkspace } from "./lib/registry.js";
 import { buildIndex, saveIndexCache } from "./lib/indexer.js";
 import { createWorkbenchServer } from "./lib/server.js";
 import { clearRuntime, isProcessAlive, isServerHealthy, loadRuntime, waitForServer } from "./lib/runtime.js";
@@ -19,7 +19,9 @@ Usage:
   ${PROGRAM_NAME} link [path] [--label <name>]
   ${PROGRAM_NAME} unlink <id|path>
   ${PROGRAM_NAME} ls
+  ${PROGRAM_NAME} status
   ${PROGRAM_NAME} refresh [--all|<id>]
+  ${PROGRAM_NAME} clear [--with-stop]
 
 Compatibility Commands:
   ${PROGRAM_NAME} workspace add <path> [--label <name>]
@@ -117,6 +119,27 @@ async function cmdList() {
   }
   for (const ws of rows) {
     console.log(`${ws.id}\t${ws.label}\t${ws.path}`);
+  }
+}
+
+async function cmdStatus() {
+  const registry = await loadRegistry();
+  const runtime = await loadRuntime({ dataDir: registry.dataDir });
+  const linkedCount = registry.workspaces.length;
+  const running = runtime ? isProcessAlive(runtime.pid) && (await isServerHealthy(runtime.port)) : false;
+
+  console.log(`Data dir: ${registry.dataDir}`);
+  if (running) {
+    console.log(`Service: running (pid=${runtime.pid}, port=${runtime.port})`);
+    console.log(`Web: http://127.0.0.1:${runtime.port}`);
+  } else if (runtime) {
+    console.log(`Service: not running (stale runtime pid=${runtime.pid}, port=${runtime.port})`);
+  } else {
+    console.log("Service: not running");
+  }
+  console.log(`Linked workspaces: ${linkedCount}`);
+  for (const ws of registry.workspaces) {
+    console.log(`- ${ws.id}\t${ws.label}\t${ws.path}`);
   }
 }
 
@@ -220,6 +243,16 @@ async function cmdDown() {
   console.log("Web service stop signal sent.");
 }
 
+async function cmdClear(args) {
+  const withStop = args.includes("--with-stop");
+  const result = await clearWorkspaces();
+  await rescanWorkspace();
+  console.log(`Cleared linked workspaces: ${result.removedCount}`);
+  if (withStop) {
+    await cmdDown();
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const cmd = args[0];
@@ -259,8 +292,18 @@ async function main() {
     return;
   }
 
+  if (cmd === "status") {
+    await cmdStatus();
+    return;
+  }
+
   if (cmd === "refresh") {
     await cmdRescan(args.slice(1));
+    return;
+  }
+
+  if (cmd === "clear") {
+    await cmdClear(args.slice(1));
     return;
   }
 

@@ -68,6 +68,16 @@ spec-readr up
 - Node.js 18+（建议 20+）
 - npm 8+
 
+### 安装方式怎么选
+
+| 场景 | 命令 | 说明 |
+|---|---|---|
+| 本地开发、边改边试 | `npm link` | 全局命令通过软链接指向当前源码目录；改代码后命令行为会立即变化。 |
+| 脱离工程目录直接使用 | `npm i -g git+ssh://git@github.com/airsun/dan-spec-viewer.git` | 不需要本地保留仓库目录，适合普通使用者。 |
+| 内网/离线发包 | `npm pack` + `npm i -g *.tgz` | 用制品分发，避免目标机直连 Git 仓库。 |
+
+`npm link` 本质是“全局软链接”，不是独立安装包；如果你希望命令与本地工程目录解耦，请优先使用 Git 安装或 `tgz` 包安装。
+
 ### 方式 A：开发态安装到 PATH（推荐）
 
 在仓库根目录执行：
@@ -88,7 +98,35 @@ npm i -g .
 
 适合固定版本使用，不依赖软链接。
 
-### 方式 C：不安装，直接运行
+### 方式 C：脱离工程目录安装（推荐给使用者）
+
+如果不希望在本地保留工程目录，可以直接从 Git 安装：
+
+```bash
+npm i -g git+ssh://git@github.com/airsun/dan-spec-viewer.git
+```
+
+或从 techlab 安装：
+
+```bash
+npm i -g git+ssh://git@git.tech.skytech.io/infra/spec-viewer.git
+```
+
+### 方式 D：离线/内网包安装
+
+先在有仓库访问权限的环境打包：
+
+```bash
+npm pack
+```
+
+再在目标机器安装 `*.tgz`：
+
+```bash
+npm i -g ./dan-spec-readr-<version>.tgz
+```
+
+### 方式 E：不安装，直接运行
 
 ```bash
 node ./src/cli.js up
@@ -142,8 +180,10 @@ spec-readr down
 spec-readr link [path] [--label <name>]
 spec-readr unlink <id|path>
 spec-readr ls
+spec-readr status
 spec-readr refresh --all
 spec-readr refresh <workspace-id>
+spec-readr clear [--with-stop]
 
 # 兼容别名
 specreadr ...
@@ -168,6 +208,13 @@ readr ...
 
 - `Spec Cards`：按 Change 队列进入审阅（默认）
 - `File Browser`：按文件路径直接浏览
+
+### 顶栏操作闭环
+
+- `Unbind Workspace`：取消当前 workspace link
+- `Unbind All`：清空全部 linked workspaces
+- `Stop Service`：停止当前 spec-readr web 进程
+- 页面会显示当前 Service 状态（running/stopped）
 
 ### 中栏：Review Reader
 

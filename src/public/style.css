@@ -77,7 +77,22 @@ h4 {
   color: var(--danger);
 }
 
+#clearWorkspacesBtn {
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+#stopServiceBtn {
+  border-color: #fecaca;
+  color: var(--danger);
+}
+
 #scanMeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#runtimeMeta {
   color: var(--muted);
   font-size: 12px;
 }

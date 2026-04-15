@@ -44,6 +44,8 @@ async function main() {
   const base = `http://127.0.0.1:${port}`;
   const apiIndex = await fetchJson(`${base}/api/index`);
   assert.equal(apiIndex.workspaces.length, 2, "api index should return two workspaces");
+  const runtimeStatus = await fetchJson(`${base}/api/runtime/status`);
+  assert.equal(runtimeStatus.running, true, "runtime status should report running");
 
   const wsAApi = apiIndex.workspaces.find((ws) => ws.label === "workspace-a");
   const filePath = wsAApi.reviewQueue[0].artifacts[0].relativePath;
@@ -67,6 +69,14 @@ async function main() {
 
   const afterDelete = await fetchJson(`${base}/api/index`);
   assert.equal(afterDelete.workspaces.length, 1, "after delete should keep one workspace");
+
+  const clearResp = await fetchJson(`${base}/api/workspaces`, {
+    method: "DELETE",
+  });
+  assert.equal(clearResp.removedCount, 1, "clear endpoint should remove remaining workspace");
+
+  const afterClear = await fetchJson(`${base}/api/index`);
+  assert.equal(afterClear.workspaces.length, 0, "after clear should keep zero workspace");
 
   await app.close();
   await fs.rm(dataDir, { recursive: true, force: true });

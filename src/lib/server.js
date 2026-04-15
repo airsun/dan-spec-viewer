@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import http from "node:http";
 import { URL, fileURLToPath } from "node:url";
-import { addWorkspace, loadRegistry, removeWorkspace, saveRegistry } from "./registry.js";
+import { addWorkspace, clearWorkspaces, loadRegistry, removeWorkspace, saveRegistry } from "./registry.js";
 import { buildIndex, saveIndexCache, loadIndexCache } from "./indexer.js";
-import { clearRuntimeIfOwned, saveRuntime } from "./runtime.js";
+import { clearRuntime, clearRuntimeIfOwned, isProcessAlive, isServerHealthy, loadRuntime, saveRuntime } from "./runtime.js";
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -111,6 +111,14 @@ export async function createWorkbenchServer(opts = {}) {
         );
       }
 
+      if (req.method === "DELETE" && url.pathname === "/api/workspaces") {
+        const result = await clearWorkspaces({ cwd, dataDir: registry.dataDir });
+        registry = result.registry;
+        index = await buildIndex(registry);
+        await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
+        return json(res, 200, { removedCount: result.removedCount });
+      }
+
       if (req.method === "POST" && url.pathname === "/api/workspaces") {
         const body = await readJsonBody(req);
         if (!body.path || typeof body.path !== "string") {
@@ -147,6 +155,41 @@ export async function createWorkbenchServer(opts = {}) {
           ok: true,
           generatedAt: index.generatedAt,
         });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/runtime/status") {
+        const runtime = await loadRuntime({ dataDir: registry.dataDir });
+        if (!runtime) {
+          return json(res, 200, { running: false, runtime: null });
+        }
+        const running = isProcessAlive(runtime.pid) && (await isServerHealthy(runtime.port));
+        return json(res, 200, {
+          running,
+          runtime,
+        });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/runtime/stop") {
+        const runtime = await loadRuntime({ dataDir: registry.dataDir });
+        if (!runtime) {
+          return json(res, 200, { stopped: false, reason: "no_runtime" });
+        }
+
+        if (runtime.pid === process.pid) {
+          json(res, 200, { stopped: true, self: true, pid: runtime.pid });
+          setTimeout(() => {
+            process.kill(process.pid, "SIGTERM");
+          }, 120);
+          return;
+        }
+
+        try {
+          process.kill(runtime.pid, "SIGTERM");
+        } catch {
+          // Ignore if process already gone.
+        }
+        await clearRuntime({ dataDir: registry.dataDir });
+        return json(res, 200, { stopped: true, self: false, pid: runtime.pid });
       }
 
       if (req.method === "GET" && url.pathname === "/api/file") {
