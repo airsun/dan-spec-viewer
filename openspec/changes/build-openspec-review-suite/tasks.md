@@ -52,3 +52,11 @@
 - [x] 8.2 Add shared selected-capability state and synchronize active highlight across capability sections.
 - [x] 8.3 Remove mixed bullet/list presentation in capability overview and align metadata placement for scanability.
 - [x] 8.4 Verify capability click-through still jumps to related spec while preserving visible selected context.
+
+## 9. Workspace/Sync Interaction Zoning
+
+- [x] 9.1 Move current-workspace refresh into workspace selector local action area.
+- [x] 9.2 Move `unbind all` from workspace local area into global sync center danger group.
+- [x] 9.3 Reduce sync center entry prominence with compact icon-first affordance and concise label.
+- [x] 9.4 Add icon-guided controls for high-frequency workspace actions (`refresh current`, `workspace actions`) with accessible tooltips.
+- [x] 9.5 Verify interaction mapping: local actions operate on selected workspace only, global actions affect all bound workspaces.

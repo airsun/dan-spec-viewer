@@ -49,3 +49,25 @@ The web application SHALL support Chinese-first UI labels and optional custom lo
 #### Scenario: Render custom logo if provided
 - **WHEN** a logo asset is present in the configured public path
 - **THEN** the header MUST prefer that logo and gracefully fall back to text branding if the logo is absent.
+
+### Requirement: Workspace-first and Global-sync Interaction Zoning
+The workbench SHALL separate workspace-scoped actions from global sync actions by interaction location and emphasis.
+
+#### Scenario: Refresh current workspace from workspace selector area
+- **WHEN** the user is operating within the workspace selector control
+- **THEN** the system MUST provide a direct current-workspace refresh action in that same local area.
+
+#### Scenario: Keep global actions in sync center
+- **WHEN** the user opens sync center
+- **THEN** the system MUST present global actions (`bind workspace`, `refresh all`, `unbind all`) in that center and avoid duplicating `unbind all` in local workspace controls.
+
+#### Scenario: De-emphasize sync center entry
+- **WHEN** sync center is displayed in topbar
+- **THEN** the entry SHOULD use compact icon-first affordance and concise labeling to reduce primary visual weight.
+
+### Requirement: Icon-guided High-frequency Controls
+The workbench SHALL support icon-guided controls for high-frequency operations while preserving textual clarity via labels or tooltips.
+
+#### Scenario: Show compact icon controls for workspace actions
+- **WHEN** the workspace selector is visible
+- **THEN** the system MUST provide intuitive icon buttons for frequent actions such as refresh-current and local action menu access.

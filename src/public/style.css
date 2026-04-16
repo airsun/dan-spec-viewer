@@ -170,7 +170,7 @@ select {
 
 .workspace-control-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
   align-items: center;
   position: relative;
@@ -260,6 +260,22 @@ select {
   position: relative;
 }
 
+.icon-btn {
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.icon-btn:hover {
+  color: var(--ink);
+}
+
 .workspace-menu summary {
   list-style: none;
   border: 1px solid var(--line-strong);
@@ -267,11 +283,13 @@ select {
   background: #fff;
   color: var(--ink-soft);
   min-height: 30px;
-  min-width: 54px;
+  min-width: 30px;
+  font-size: 15px;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 10px;
+  padding: 0;
   cursor: pointer;
 }
 
@@ -290,7 +308,7 @@ select {
   right: 0;
   top: calc(100% + 6px);
   z-index: 12;
-  width: 176px;
+  width: 184px;
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(17, 24, 39, 0.1);
@@ -349,11 +367,6 @@ select {
 #stopServiceBtn {
   border-color: #f3c4bf;
   color: #9f1b11;
-}
-
-#clearWorkspacesBtn {
-  border-color: #f0d2ab;
-  color: #9a4d00;
 }
 
 .meta-line {
@@ -595,11 +608,24 @@ select {
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   background: #fff;
-  color: var(--ink);
-  padding: 5px 10px;
+  color: var(--ink-soft);
+  padding: 4px 8px;
   min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   cursor: pointer;
   user-select: none;
+}
+
+.sync-summary-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sync-summary-text {
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 .sync-popover summary::-webkit-details-marker {
@@ -613,6 +639,7 @@ select {
 .sync-popover[open] summary {
   border-color: #9ec5ff;
   background: #f4f9ff;
+  color: #0958bf;
 }
 
 .sync-popover-panel {
@@ -648,8 +675,35 @@ select {
 
 .sync-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
+}
+
+.sync-danger {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+#clearWorkspacesBtn {
+  width: fit-content;
+  border-color: #f0d2ab;
+  color: #9a4d00;
+  background: #fffaf2;
+}
+
+#clearWorkspacesBtn:hover {
+  background: #fff3dc;
+}
+
+#stopServiceBtn {
+  width: fit-content;
+  background: #fff5f5;
+}
+
+#stopServiceBtn:hover {
+  background: #ffe9e9;
 }
 
 .segmented {

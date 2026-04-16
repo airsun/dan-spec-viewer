@@ -423,6 +423,7 @@ function renderSyncState() {
   els.syncAddBtn.disabled = syncing;
   els.refreshAllBtn.disabled = syncing;
   els.refreshWorkspaceBtn.disabled = syncing || !state.selectedWorkspaceId;
+  els.clearWorkspacesBtn.disabled = syncing || (state.index?.workspaces || []).length === 0;
 }
 
 function renderWorkspaceBar() {
@@ -466,7 +467,6 @@ function renderWorkspaceBar() {
   els.workspaceComboToggle.disabled = list.length === 0;
   els.workspaceComboToggle.setAttribute("aria-expanded", state.workspaceDropdownOpen ? "true" : "false");
   els.removeWorkspaceBtn.disabled = !list.find((ws) => ws.id === state.selectedWorkspaceId);
-  els.clearWorkspacesBtn.disabled = list.length === 0;
   els.stopServiceBtn.disabled = !state.runtime?.running;
 
   const totalChanges = list.reduce((sum, ws) => sum + ws.changes.length, 0);
@@ -1327,7 +1327,7 @@ function bindStaticEvents() {
   });
 
   els.clearWorkspacesBtn.addEventListener("click", async () => {
-    if (!confirm("确认清空所有已绑定工作区？")) return;
+    if (!confirm("确认解绑全部已绑定工作区？")) return;
     await guarded(async () => {
       await api("/api/workspaces", { method: "DELETE" });
       state.selectedWorkspaceId = null;
@@ -1337,6 +1337,9 @@ function bindStaticEvents() {
       state.selectedCapabilityName = null;
       state.selectedArtifactPath = null;
       await loadDashboard();
+      if (els.syncPopover?.open) {
+        els.syncPopover.open = false;
+      }
     }, { messagePrefix: "清空工作区失败" });
   });
 
