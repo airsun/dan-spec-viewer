@@ -31,3 +31,14 @@ The web application SHALL provide timeline views to show recent evolution of cap
 #### Scenario: View workspace change timeline
 - **WHEN** the user browses current workspace context
 - **THEN** the system MUST expose recent change updates with timestamps and event types.
+
+### Requirement: Unified Capability Selection Affordance
+Capability entries SHALL use a consistent selectable row style across navigation and lens sections.
+
+#### Scenario: Capability rows look and behave consistently
+- **WHEN** the user views capability entries in different sections (navigation capability list and global capability overview)
+- **THEN** the system MUST present them with unified row affordances (full-row clickable target, consistent hover/active state, and aligned metadata layout).
+
+#### Scenario: Selected capability is visible across regions
+- **WHEN** the user selects a capability entry in one section
+- **THEN** the system MUST preserve and reflect that selected state in other capability sections within the current workspace context.

@@ -19,9 +19,10 @@
 
         <div class="sidebar-section">
           <h2>工作区</h2>
+          <input id="workspaceSearchInput" placeholder="输入名称/路径，模糊检索工作区" />
           <select id="workspaceSelect"></select>
-          <p id="scanMeta" class="meta-line"></p>
-          <p id="runtimeMeta" class="meta-line"></p>
+          <div id="scanMeta" class="meta-line"></div>
+          <div id="runtimeMeta" class="meta-line"></div>
           <details class="ops-drawer">
             <summary>低频操作</summary>
             <div class="ops-grid">
@@ -49,25 +50,32 @@
 
       <section class="workspace-shell">
         <header class="topbar">
-          <div>
+          <div class="topbar-title">
             <h2>OpenSpec 审阅工作台</h2>
             <p>Change-first 推进，Capability 全局视角</p>
           </div>
+          <div class="topbar-actions">
+            <div class="sync-mini" aria-live="polite">
+              <span id="syncStateBadge" class="sync-badge">空闲</span>
+              <span id="syncStateText" class="sync-text">等待同步操作</span>
+            </div>
+            <details id="syncPopover" class="sync-popover">
+              <summary>同步中心</summary>
+              <div class="sync-popover-panel">
+                <h3>绑定与索引</h3>
+                <div class="sync-form">
+                  <input id="addWorkspacePath" placeholder="工作区路径，例如 /path/to/workspace" />
+                  <input id="addWorkspaceLabel" placeholder="显示名称（可选）" />
+                  <button id="syncAddBtn" class="primary">添加并刷新</button>
+                </div>
+                <div class="sync-actions">
+                  <button id="refreshWorkspaceBtn">刷新当前</button>
+                  <button id="refreshAllBtn">刷新全部</button>
+                </div>
+              </div>
+            </details>
+          </div>
         </header>
-
-        <section class="sync-center">
-          <div class="sync-form">
-            <input id="addWorkspacePath" placeholder="工作区路径，例如 /path/to/workspace" />
-            <input id="addWorkspaceLabel" placeholder="显示名称（可选）" />
-            <button id="syncAddBtn" class="primary">添加并刷新</button>
-            <button id="refreshWorkspaceBtn">刷新当前</button>
-            <button id="refreshAllBtn">刷新全部</button>
-          </div>
-          <div class="sync-status-row">
-            <span id="syncStateBadge" class="sync-badge">空闲</span>
-            <span id="syncStateText" class="sync-text">等待同步操作</span>
-          </div>
-        </section>
 
         <section class="actionbar">
           <div class="reader-switch">

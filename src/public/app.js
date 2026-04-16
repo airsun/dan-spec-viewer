@@ -4,11 +4,13 @@ const state = {
   sync: null,
   timeline: [],
   selectedWorkspaceId: null,
+  workspaceQuery: "",
   navMode: "cards",
   navQuery: "",
   readerMode: "story",
   readerFocus: "change",
   selectedChangeId: null,
+  selectedCapabilityName: null,
   selectedArtifactPath: null,
   compareLeftPath: null,
   compareRightPath: null,
@@ -17,6 +19,7 @@ const state = {
 
 const els = {
   workspaceSelect: document.getElementById("workspaceSelect"),
+  workspaceSearchInput: document.getElementById("workspaceSearchInput"),
   removeWorkspaceBtn: document.getElementById("removeWorkspaceBtn"),
   clearWorkspacesBtn: document.getElementById("clearWorkspacesBtn"),
   stopServiceBtn: document.getElementById("stopServiceBtn"),
@@ -27,6 +30,7 @@ const els = {
   refreshAllBtn: document.getElementById("refreshAllBtn"),
   syncStateBadge: document.getElementById("syncStateBadge"),
   syncStateText: document.getElementById("syncStateText"),
+  syncPopover: document.getElementById("syncPopover"),
   scanMeta: document.getElementById("scanMeta"),
   runtimeMeta: document.getElementById("runtimeMeta"),
   modeCardsBtn: document.getElementById("modeCardsBtn"),
@@ -187,6 +191,16 @@ function setDefaultSelection() {
   if (!ws.changes.find((item) => item.id === state.selectedChangeId)) {
     state.selectedChangeId = (ws.reviewQueue[0] || ws.changes[0] || {}).id || null;
   }
+  const capabilityNames = new Set(ws.capabilities.map((cap) => cap.name));
+  if (state.selectedCapabilityName && !capabilityNames.has(state.selectedCapabilityName)) {
+    state.selectedCapabilityName = null;
+  }
+
+  const selectedChange = getSelectedChange(ws);
+  if (!state.selectedCapabilityName) {
+    const hinted = selectedChange?.impactedCapabilities?.find((name) => capabilityNames.has(name)) || null;
+    state.selectedCapabilityName = hinted;
+  }
 
   const fileExists = ws.files.some((file) => file.relativePath === state.selectedArtifactPath);
   if (state.readerFocus === "file" && fileExists) return;
@@ -210,9 +224,65 @@ function setDefaultSelection() {
   if (!paths.has(state.compareRightPath)) state.compareRightPath = defaults.preferredRight;
 }
 
+function capabilityToken(name) {
+  return encodeURIComponent(name);
+}
+
+function getCapabilityByName(workspace, name) {
+  if (!workspace || !name) return null;
+  return workspace.capabilities.find((item) => item.name === name) || null;
+}
+
+function fuzzyMatch(source, query) {
+  if (!query) return true;
+  const haystack = String(source || "").toLowerCase();
+  const needle = String(query || "").toLowerCase();
+  if (haystack.includes(needle)) return true;
+
+  let cursor = 0;
+  for (const ch of needle) {
+    cursor = haystack.indexOf(ch, cursor);
+    if (cursor === -1) return false;
+    cursor += 1;
+  }
+  return true;
+}
+
+function renderCapabilityRow({
+  capabilityName,
+  workspaceId,
+  relatedCount = 0,
+  latest = null,
+  workspaceLabel = "",
+  extraMeta = "",
+  active = false,
+  compact = false,
+}) {
+  const rowClass = ["cap-row"];
+  if (compact) rowClass.push("compact");
+  if (active) rowClass.push("active");
+
+  const metaParts = [`关联变更 ${relatedCount}`];
+  if (workspaceLabel) metaParts.push(workspaceLabel);
+  if (extraMeta) metaParts.push(extraMeta);
+
+  return `<button class="${rowClass.join(" ")}" data-capability-name="${capabilityToken(capabilityName)}" data-workspace-id="${workspaceId}">
+    <span class="cap-main">${escapeHtml(capabilityName)}</span>
+    <span class="cap-time">${formatTs(latest)}</span>
+    <span class="cap-meta">${escapeHtml(metaParts.join(" · "))}</span>
+  </button>`;
+}
+
 function mapSyncSummary(summary) {
   if (!summary) return "无增量变化";
   return `工作区 ${summary.workspaceCount || 0} · 新增变更 ${summary.changeAdded || 0} · 变更更新 ${summary.changeUpdated || 0} · 新增能力 ${summary.capabilityAdded || 0} · 能力更新 ${summary.capabilityUpdated || 0}`;
+}
+
+function renderMetaBadge(label, value, tone = "neutral") {
+  return `<span class="meta-badge ${tone}">
+    <span class="meta-badge-label">${escapeHtml(label)}</span>
+    <span class="meta-badge-value">${escapeHtml(value)}</span>
+  </span>`;
 }
 
 function renderSyncState() {
@@ -241,39 +311,96 @@ function renderSyncState() {
 
 function renderWorkspaceBar() {
   const list = state.index?.workspaces || [];
+  const query = state.workspaceQuery.trim().toLowerCase();
+  const filtered = list.filter((ws) => fuzzyMatch(`${ws.label} ${ws.path} ${ws.id}`, query));
   els.workspaceSelect.innerHTML = "";
+  if (els.workspaceSearchInput.value !== state.workspaceQuery) {
+    els.workspaceSearchInput.value = state.workspaceQuery;
+  }
 
-  for (const ws of list) {
+  for (const ws of filtered) {
     const opt = document.createElement("option");
     opt.value = ws.id;
     opt.textContent = `${ws.label}（${ws.status === "ok" ? "可读" : "异常"}）`;
+    els.workspaceSelect.appendChild(opt);
+  }
+  if (filtered.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = list.length === 0 ? "暂无工作区" : "无匹配工作区";
     els.workspaceSelect.appendChild(opt);
   }
 
   if (!list.find((ws) => ws.id === state.selectedWorkspaceId)) {
     state.selectedWorkspaceId = list[0]?.id || null;
   }
-  if (state.selectedWorkspaceId) {
+  if (filtered.length > 0 && !filtered.find((ws) => ws.id === state.selectedWorkspaceId)) {
+    state.selectedWorkspaceId = filtered[0].id;
+  }
+  if (filtered.length > 0 && state.selectedWorkspaceId) {
     els.workspaceSelect.value = state.selectedWorkspaceId;
   }
 
-  els.workspaceSelect.disabled = list.length === 0;
-  els.removeWorkspaceBtn.disabled = !state.selectedWorkspaceId;
+  els.workspaceSelect.disabled = filtered.length === 0;
+  els.removeWorkspaceBtn.disabled = !list.find((ws) => ws.id === state.selectedWorkspaceId);
   els.clearWorkspacesBtn.disabled = list.length === 0;
   els.stopServiceBtn.disabled = !state.runtime?.running;
 
   const totalChanges = list.reduce((sum, ws) => sum + ws.changes.length, 0);
   const totalCaps = list.reduce((sum, ws) => sum + ws.capabilities.length, 0);
-  els.scanMeta.textContent = state.index?.generatedAt
-    ? `索引时间 ${formatTs(state.index.generatedAt)} · 工作区 ${list.length} · 变更 ${totalChanges} · 能力 ${totalCaps}`
-    : "暂无索引";
+  if (state.index?.generatedAt) {
+    els.scanMeta.innerHTML = `
+      <div class="meta-group">
+        <div class="meta-group-title">索引概览</div>
+        <div class="meta-badge-grid metrics">
+          ${renderMetaBadge("索引", formatTs(state.index.generatedAt), "info")}
+          ${renderMetaBadge("工作区", String(list.length))}
+          ${renderMetaBadge("变更", String(totalChanges))}
+          ${renderMetaBadge("能力", String(totalCaps))}
+        </div>
+      </div>
+    `;
+  } else {
+    els.scanMeta.innerHTML = `
+      <div class="meta-group">
+        <div class="meta-group-title">索引概览</div>
+        <div class="meta-badge-grid metrics">
+          ${renderMetaBadge("索引", "暂无", "muted")}
+        </div>
+      </div>
+    `;
+  }
 
   if (!state.runtime?.runtime) {
-    els.runtimeMeta.textContent = "服务状态：未运行";
+    els.runtimeMeta.innerHTML = `
+      <div class="meta-group">
+        <div class="meta-group-title">服务状态</div>
+        <div class="meta-badge-grid runtime">
+          ${renderMetaBadge("服务", "未运行", "warn")}
+        </div>
+      </div>
+    `;
   } else if (state.runtime.running) {
-    els.runtimeMeta.textContent = `服务状态：运行中（端口 ${state.runtime.runtime.port}，pid ${state.runtime.runtime.pid}）`;
+    els.runtimeMeta.innerHTML = `
+      <div class="meta-group">
+        <div class="meta-group-title">服务状态</div>
+        <div class="meta-badge-grid runtime">
+          ${renderMetaBadge("服务", "运行中", "success")}
+          ${renderMetaBadge("端口", String(state.runtime.runtime.port))}
+          ${renderMetaBadge("PID", String(state.runtime.runtime.pid), "muted")}
+        </div>
+      </div>
+    `;
   } else {
-    els.runtimeMeta.textContent = `服务状态：运行信息失效（pid ${state.runtime.runtime.pid}）`;
+    els.runtimeMeta.innerHTML = `
+      <div class="meta-group">
+        <div class="meta-group-title">服务状态</div>
+        <div class="meta-badge-grid runtime">
+          ${renderMetaBadge("服务", "信息失效", "warn")}
+          ${renderMetaBadge("PID", String(state.runtime.runtime.pid), "muted")}
+        </div>
+      </div>
+    `;
   }
 }
 
@@ -344,10 +471,14 @@ function renderNavigation() {
     .filter((cap) => matches(cap.name))
     .map((cap) => {
       const latest = cap.relatedChanges?.[0]?.lastModified || null;
-      return `<button class="card link-btn" data-capability-name="${cap.name}">
-        <strong>${escapeHtml(cap.name)}</strong>
-        <div class="muted">关联变更 ${cap.relatedChanges.length} · 最近 ${formatTs(latest)}</div>
-      </button>`;
+      return renderCapabilityRow({
+        capabilityName: cap.name,
+        workspaceId: ws.id,
+        relatedCount: cap.relatedChanges.length,
+        latest,
+        active: state.selectedCapabilityName === cap.name,
+        compact: true,
+      });
     })
     .join("");
 
@@ -358,7 +489,7 @@ function renderNavigation() {
       ${queueRows || '<p class="muted">没有匹配变更。</p>'}
     </div>
     <h3>能力</h3>
-    <div>${capCards || '<p class="muted">没有匹配能力。</p>'}</div>
+    <div class="cap-list">${capCards || '<p class="muted">没有匹配能力。</p>'}</div>
   `;
 }
 
@@ -545,7 +676,18 @@ function renderCapabilityLens() {
 
   const change = getSelectedChange(ws);
   const impacted = (change?.impactedCapabilities || [])
-    .map((name) => `<button class="link-btn" data-capability-name="${name}">- ${escapeHtml(name)}</button>`)
+    .map((name) => {
+      const cap = getCapabilityByName(ws, name);
+      return renderCapabilityRow({
+        capabilityName: name,
+        workspaceId: ws.id,
+        relatedCount: cap?.relatedChanges?.length || 0,
+        latest: cap?.relatedChanges?.[0]?.lastModified || null,
+        extraMeta: "当前变更",
+        active: state.selectedCapabilityName === name,
+        compact: true,
+      });
+    })
     .join("");
 
   const grouped = (state.index?.workspaces || [])
@@ -553,23 +695,36 @@ function renderCapabilityLens() {
       const capItems = workspace.capabilities
         .map((cap) => {
           const latest = cap.relatedChanges?.[0]?.lastModified;
-          return `<li><button class="link-btn" data-capability-name="${cap.name}">${escapeHtml(cap.name)} <span class="muted">${formatTs(latest)}</span></button></li>`;
+          return renderCapabilityRow({
+            capabilityName: cap.name,
+            workspaceId: workspace.id,
+            relatedCount: cap.relatedChanges.length,
+            latest,
+            active: workspace.id === ws.id && state.selectedCapabilityName === cap.name,
+            compact: true,
+          });
         })
         .join("");
-      return `<div class="card">
+      return `<div class="card workspace-cap-card">
         <strong>${escapeHtml(workspace.label)}</strong>
-        <ul>${capItems || "<li class='muted'>暂无能力</li>"}</ul>
+        <div class="cap-list">${capItems || "<p class='muted'>暂无能力</p>"}</div>
       </div>`;
     })
     .join("");
 
   els.lensContent.innerHTML = `
-    <h3>当前变更影响能力</h3>
-    <div>${impacted || '<p class="muted">当前变更未标注能力。</p>'}</div>
-    <h3>全局能力概览</h3>
-    <div>${grouped || '<p class="muted">暂无工作区数据。</p>'}</div>
-    <h3>时间线</h3>
-    <div class="timeline-list">${renderTimelineItems()}</div>
+    <section class="lens-section">
+      <h3>当前变更影响能力</h3>
+      <div class="cap-list">${impacted || '<p class="muted">当前变更未标注能力。</p>'}</div>
+    </section>
+    <section class="lens-section">
+      <h3>全局能力概览</h3>
+      <div class="workspace-cap-groups">${grouped || '<p class="muted">暂无工作区数据。</p>'}</div>
+    </section>
+    <section class="lens-section">
+      <h3>时间线</h3>
+      <div class="timeline-list">${renderTimelineItems()}</div>
+    </section>
   `;
 }
 
@@ -609,6 +764,7 @@ async function rerender() {
 function jumpToCapability(name) {
   const ws = getSelectedWorkspace();
   if (!ws) return;
+  state.selectedCapabilityName = name;
 
   for (const candidate of ws.changes) {
     const hit = getChangeArtifacts(candidate).find((artifact) => artifact.type === "spec" && artifact.capability === name);
@@ -628,7 +784,10 @@ function jumpToCapability(name) {
     state.readerMode = "story";
     state.readerFocus = "file";
     rerender();
+    return;
   }
+
+  rerender();
 }
 
 function bindDynamicEvents() {
@@ -660,7 +819,17 @@ function bindDynamicEvents() {
 
   for (const el of document.querySelectorAll("[data-capability-name]")) {
     el.addEventListener("click", () => {
-      jumpToCapability(el.dataset.capabilityName);
+      const capabilityName = decodeURIComponent(el.dataset.capabilityName || "");
+      const workspaceId = el.dataset.workspaceId || state.selectedWorkspaceId;
+      if (workspaceId && workspaceId !== state.selectedWorkspaceId) {
+        state.selectedWorkspaceId = workspaceId;
+        state.selectedChangeId = null;
+        state.selectedArtifactPath = null;
+        state.compareLeftPath = null;
+        state.compareRightPath = null;
+        state.readerFocus = "change";
+      }
+      jumpToCapability(capabilityName);
     });
   }
 
@@ -729,6 +898,9 @@ async function runSync(payload, pendingMessage) {
     body: JSON.stringify(payload || {}),
   });
   await loadDashboard();
+  if (els.syncPopover?.open) {
+    els.syncPopover.open = false;
+  }
 }
 
 function bindStaticEvents() {
@@ -739,19 +911,46 @@ function bindStaticEvents() {
     els.brandLogo.parentElement.classList.remove("has-logo");
   });
 
+  document.addEventListener("click", (event) => {
+    if (!els.syncPopover?.open) return;
+    if (els.syncPopover.contains(event.target)) return;
+    els.syncPopover.open = false;
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && els.syncPopover?.open) {
+      els.syncPopover.open = false;
+    }
+  });
+
   els.navSearchInput.addEventListener("input", () => {
     state.navQuery = els.navSearchInput.value;
     rerender();
   });
 
   els.workspaceSelect.addEventListener("change", () => {
+    if (!els.workspaceSelect.value) return;
     state.selectedWorkspaceId = els.workspaceSelect.value;
     state.selectedChangeId = null;
+    state.selectedCapabilityName = null;
     state.selectedArtifactPath = null;
     state.compareLeftPath = null;
     state.compareRightPath = null;
     state.readerFocus = "change";
     rerender();
+  });
+
+  els.workspaceSearchInput.addEventListener("input", () => {
+    state.workspaceQuery = els.workspaceSearchInput.value;
+    rerender();
+  });
+
+  els.workspaceSearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      state.workspaceQuery = "";
+      els.workspaceSearchInput.value = "";
+      rerender();
+    }
   });
 
   els.modeCardsBtn.addEventListener("click", () => {
@@ -815,6 +1014,7 @@ function bindStaticEvents() {
       await api(`/api/workspaces/${encodeURIComponent(state.selectedWorkspaceId)}`, { method: "DELETE" });
       state.selectedWorkspaceId = null;
       state.selectedChangeId = null;
+      state.selectedCapabilityName = null;
       state.selectedArtifactPath = null;
       await loadDashboard();
     }, { messagePrefix: "解绑失败" });
@@ -826,6 +1026,7 @@ function bindStaticEvents() {
       await api("/api/workspaces", { method: "DELETE" });
       state.selectedWorkspaceId = null;
       state.selectedChangeId = null;
+      state.selectedCapabilityName = null;
       state.selectedArtifactPath = null;
       await loadDashboard();
     }, { messagePrefix: "清空工作区失败" });
@@ -835,7 +1036,14 @@ function bindStaticEvents() {
     if (!confirm("确认停止 spec-readr 服务？")) return;
     await guarded(async () => {
       await api("/api/runtime/stop", { method: "POST", body: JSON.stringify({}) });
-      els.runtimeMeta.textContent = "服务状态：正在停止...";
+      els.runtimeMeta.innerHTML = `
+        <div class="meta-group">
+          <div class="meta-group-title">服务状态</div>
+          <div class="meta-badge-grid runtime">
+            ${renderMetaBadge("服务", "正在停止...", "warn")}
+          </div>
+        </div>
+      `;
     }, { messagePrefix: "停止服务失败" });
   });
 }

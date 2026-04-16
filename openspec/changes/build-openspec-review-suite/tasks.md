@@ -45,3 +45,10 @@
 - [x] 7.4 Enrich change/capability cards with timeline-related metadata (recent updates and event summaries).
 - [x] 7.5 Localize primary UI text to Chinese and add optional logo rendering with text fallback.
 - [x] 7.6 Verify sync status flow, timeline rendering, and Chinese UI behavior end-to-end.
+
+## 8. Capability Selection Consistency
+
+- [x] 8.1 Introduce unified capability row component style for both navigation capability list and global capability overview.
+- [x] 8.2 Add shared selected-capability state and synchronize active highlight across capability sections.
+- [x] 8.3 Remove mixed bullet/list presentation in capability overview and align metadata placement for scanability.
+- [x] 8.4 Verify capability click-through still jumps to related spec while preserving visible selected context.
