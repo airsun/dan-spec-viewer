@@ -19,18 +19,21 @@
 
         <div class="sidebar-section">
           <h2>工作区</h2>
-          <input id="workspaceSearchInput" placeholder="输入名称/路径，模糊检索工作区" />
-          <select id="workspaceSelect"></select>
-          <div id="scanMeta" class="meta-line"></div>
-          <div id="runtimeMeta" class="meta-line"></div>
-          <details class="ops-drawer">
-            <summary>低频操作</summary>
-            <div class="ops-grid">
-              <button id="removeWorkspaceBtn">解绑当前工作区</button>
-              <button id="clearWorkspacesBtn">清空所有工作区</button>
-              <button id="stopServiceBtn">停止服务</button>
+          <div class="workspace-control-row">
+            <div class="workspace-combo" id="workspaceComboWrap">
+              <input id="workspaceCombo" autocomplete="off" placeholder="输入名称/路径，模糊检索并选择工作区" />
+              <button id="workspaceComboToggle" type="button" aria-label="展开工作区列表">▾</button>
+              <div id="workspaceDropdown" class="workspace-dropdown"></div>
             </div>
-          </details>
+            <details id="workspaceMenu" class="workspace-menu">
+              <summary>操作</summary>
+              <div class="workspace-menu-list">
+                <button id="removeWorkspaceBtn">解绑当前工作区</button>
+                <button id="clearWorkspacesBtn">清空所有工作区</button>
+                <button id="stopServiceBtn">停止服务</button>
+              </div>
+            </details>
+          </div>
         </div>
 
         <div class="sidebar-section">
@@ -45,6 +48,10 @@
             <input id="navSearchInput" placeholder="筛选变更 / 能力 / 文件" />
           </div>
           <div id="navContent" class="sidebar-content"></div>
+        </div>
+        <div class="sidebar-footer">
+          <div id="scanMeta" class="meta-line"></div>
+          <div id="runtimeMeta" class="meta-line"></div>
         </div>
       </aside>
 
@@ -77,22 +84,20 @@
           </div>
         </header>
 
-        <section class="actionbar">
-          <div class="reader-switch">
-            <span>阅读模式</span>
-            <div class="segmented">
-              <button id="viewStoryBtn" class="active">串读</button>
-              <button id="viewCompareBtn">并排</button>
-            </div>
-          </div>
-          <span class="muted">聚焦：变更、能力、文件</span>
-        </section>
-
         <main class="content-grid">
           <section class="panel reader-panel">
             <div class="panel-head">
-              <h3>阅读区</h3>
-              <span class="readonly">只读</span>
+              <div class="panel-head-left">
+                <h3>阅读区</h3>
+                <span class="readonly">只读</span>
+              </div>
+              <div class="reader-mode-inline">
+                <span>阅读模式</span>
+                <div class="segmented">
+                  <button id="viewStoryBtn" class="active">串读</button>
+                  <button id="viewCompareBtn">并排</button>
+                </div>
+              </div>
             </div>
             <div id="readerContent" class="panel-content"></div>
           </section>
@@ -106,7 +111,6 @@
         </main>
       </section>
     </div>
-
     <script src="/app.js" type="module"></script>
   </body>
 </html>

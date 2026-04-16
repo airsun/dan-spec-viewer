@@ -5,8 +5,11 @@ const state = {
   timeline: [],
   selectedWorkspaceId: null,
   workspaceQuery: "",
+  workspaceDropdownOpen: false,
   navMode: "cards",
   navQuery: "",
+  capabilityScope: "change",
+  capabilityLensQuery: "",
   readerMode: "story",
   readerFocus: "change",
   selectedChangeId: null,
@@ -18,8 +21,10 @@ const state = {
 };
 
 const els = {
-  workspaceSelect: document.getElementById("workspaceSelect"),
-  workspaceSearchInput: document.getElementById("workspaceSearchInput"),
+  workspaceCombo: document.getElementById("workspaceCombo"),
+  workspaceComboWrap: document.getElementById("workspaceComboWrap"),
+  workspaceComboToggle: document.getElementById("workspaceComboToggle"),
+  workspaceDropdown: document.getElementById("workspaceDropdown"),
   removeWorkspaceBtn: document.getElementById("removeWorkspaceBtn"),
   clearWorkspacesBtn: document.getElementById("clearWorkspacesBtn"),
   stopServiceBtn: document.getElementById("stopServiceBtn"),
@@ -31,6 +36,7 @@ const els = {
   syncStateBadge: document.getElementById("syncStateBadge"),
   syncStateText: document.getElementById("syncStateText"),
   syncPopover: document.getElementById("syncPopover"),
+  workspaceMenu: document.getElementById("workspaceMenu"),
   scanMeta: document.getElementById("scanMeta"),
   runtimeMeta: document.getElementById("runtimeMeta"),
   modeCardsBtn: document.getElementById("modeCardsBtn"),
@@ -233,6 +239,52 @@ function getCapabilityByName(workspace, name) {
   return workspace.capabilities.find((item) => item.name === name) || null;
 }
 
+function getCapabilitySignals(workspace, capabilityName) {
+  if (!workspace || !capabilityName) {
+    return {
+      specCount: 0,
+      pendingChanges: 0,
+      missingArtifacts: 0,
+      latestSpecAt: null,
+    };
+  }
+
+  let specCount = 0;
+  let pendingChanges = 0;
+  let missingArtifacts = 0;
+  let latestSpecAt = null;
+
+  for (const change of workspace.changes || []) {
+    if (!change.impactedCapabilities?.includes(capabilityName)) continue;
+    const specHits = (change.artifacts || []).filter((a) => a.type === "spec" && a.capability === capabilityName).length;
+    specCount += specHits;
+    if (change.needsReview) pendingChanges += 1;
+    missingArtifacts += change.missingArtifacts?.length || 0;
+
+    if (!latestSpecAt || (change.lastModified || "") > latestSpecAt) {
+      latestSpecAt = change.lastModified || latestSpecAt;
+    }
+  }
+
+  return { specCount, pendingChanges, missingArtifacts, latestSpecAt };
+}
+
+function getCapabilitySpecState(workspace, capabilityName) {
+  const cap = getCapabilityByName(workspace, capabilityName);
+  const signals = getCapabilitySignals(workspace, capabilityName);
+
+  if (!cap?.currentSpecRelativePath) {
+    return { label: "缺 current", tone: "warn", signals };
+  }
+  if (signals.specCount <= 1) {
+    return { label: "单 spec", tone: "muted", signals };
+  }
+  if (signals.pendingChanges > 0 || signals.missingArtifacts > 0) {
+    return { label: "多 spec 待收敛", tone: "warn", signals };
+  }
+  return { label: "多 spec", tone: "info", signals };
+}
+
 function fuzzyMatch(source, query) {
   if (!query) return true;
   const haystack = String(source || "").toLowerCase();
@@ -248,6 +300,41 @@ function fuzzyMatch(source, query) {
   return true;
 }
 
+function workspaceDisplayText(ws) {
+  if (!ws) return "";
+  return `${ws.label}（${ws.status === "ok" ? "可读" : "异常"}）`;
+}
+
+function resolveWorkspaceIdFromInput(rawInput, list) {
+  const input = String(rawInput || "").trim().toLowerCase();
+  if (!input) return null;
+
+  const exact = list.find(
+    (ws) => ws.id.toLowerCase() === input || ws.label.toLowerCase() === input || ws.path.toLowerCase() === input
+  );
+  if (exact) return exact.id;
+
+  const partial = list.find((ws) => fuzzyMatch(`${ws.label} ${ws.path} ${ws.id}`, input));
+  return partial?.id || null;
+}
+
+function applyWorkspaceSelectionById(workspaceId) {
+  if (!workspaceId) return;
+  if (workspaceId !== state.selectedWorkspaceId) {
+    state.selectedWorkspaceId = workspaceId;
+    state.selectedChangeId = null;
+    state.selectedCapabilityName = null;
+    state.selectedArtifactPath = null;
+    state.compareLeftPath = null;
+    state.compareRightPath = null;
+    state.readerFocus = "change";
+  }
+  state.workspaceQuery = "";
+  state.workspaceDropdownOpen = false;
+  state.capabilityLensQuery = "";
+  rerender();
+}
+
 function renderCapabilityRow({
   capabilityName,
   workspaceId,
@@ -255,6 +342,8 @@ function renderCapabilityRow({
   latest = null,
   workspaceLabel = "",
   extraMeta = "",
+  stateLabel = "",
+  stateTone = "muted",
   active = false,
   compact = false,
 }) {
@@ -267,7 +356,10 @@ function renderCapabilityRow({
   if (extraMeta) metaParts.push(extraMeta);
 
   return `<button class="${rowClass.join(" ")}" data-capability-name="${capabilityToken(capabilityName)}" data-workspace-id="${workspaceId}">
-    <span class="cap-main">${escapeHtml(capabilityName)}</span>
+    <span class="cap-main-wrap">
+      <span class="cap-main">${escapeHtml(capabilityName)}</span>
+      ${stateLabel ? `<span class="cap-state ${stateTone}">${escapeHtml(stateLabel)}</span>` : ""}
+    </span>
     <span class="cap-time">${formatTs(latest)}</span>
     <span class="cap-meta">${escapeHtml(metaParts.join(" · "))}</span>
   </button>`;
@@ -283,6 +375,30 @@ function renderMetaBadge(label, value, tone = "neutral") {
     <span class="meta-badge-label">${escapeHtml(label)}</span>
     <span class="meta-badge-value">${escapeHtml(value)}</span>
   </span>`;
+}
+
+function describeFreshness(ts) {
+  if (!ts) return { text: "未索引", tone: "muted" };
+  const then = new Date(ts).getTime();
+  if (!Number.isFinite(then)) return { text: "时间异常", tone: "warn" };
+
+  const diffMs = Date.now() - then;
+  if (diffMs < 60_000) return { text: "刚刚", tone: "success" };
+
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 15) return { text: `${diffMin} 分钟前`, tone: "success" };
+  if (diffMin < 60) return { text: `${diffMin} 分钟前`, tone: "info" };
+
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return { text: `${diffHour} 小时前`, tone: "warn" };
+
+  const diffDay = Math.floor(diffHour / 24);
+  return { text: `${diffDay} 天前`, tone: "warn" };
+}
+
+function renderSyncInsight(summary) {
+  if (!summary) return "";
+  return `<div class="index-hint">最近同步：新增变更 ${summary.changeAdded || 0} · 变更更新 ${summary.changeUpdated || 0} · 新增能力 ${summary.capabilityAdded || 0}</div>`;
 }
 
 function renderSyncState() {
@@ -313,59 +429,86 @@ function renderWorkspaceBar() {
   const list = state.index?.workspaces || [];
   const query = state.workspaceQuery.trim().toLowerCase();
   const filtered = list.filter((ws) => fuzzyMatch(`${ws.label} ${ws.path} ${ws.id}`, query));
-  els.workspaceSelect.innerHTML = "";
-  if (els.workspaceSearchInput.value !== state.workspaceQuery) {
-    els.workspaceSearchInput.value = state.workspaceQuery;
-  }
-
-  for (const ws of filtered) {
-    const opt = document.createElement("option");
-    opt.value = ws.id;
-    opt.textContent = `${ws.label}（${ws.status === "ok" ? "可读" : "异常"}）`;
-    els.workspaceSelect.appendChild(opt);
-  }
-  if (filtered.length === 0) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = list.length === 0 ? "暂无工作区" : "无匹配工作区";
-    els.workspaceSelect.appendChild(opt);
-  }
 
   if (!list.find((ws) => ws.id === state.selectedWorkspaceId)) {
     state.selectedWorkspaceId = list[0]?.id || null;
-  }
-  if (filtered.length > 0 && !filtered.find((ws) => ws.id === state.selectedWorkspaceId)) {
-    state.selectedWorkspaceId = filtered[0].id;
-  }
-  if (filtered.length > 0 && state.selectedWorkspaceId) {
-    els.workspaceSelect.value = state.selectedWorkspaceId;
+    state.workspaceQuery = "";
   }
 
-  els.workspaceSelect.disabled = filtered.length === 0;
+  let dropdownRows = "";
+  if (list.length === 0) {
+    dropdownRows = '<div class="workspace-option empty">暂无工作区</div>';
+  } else if (filtered.length === 0) {
+    dropdownRows = '<div class="workspace-option empty">无匹配工作区</div>';
+  } else {
+    dropdownRows = filtered
+      .slice(0, 32)
+      .map((ws) => {
+        const active = ws.id === state.selectedWorkspaceId ? "active" : "";
+        const statusText = ws.status === "ok" ? "可读" : "异常";
+        return `<button class="workspace-option ${active}" data-workspace-option-id="${ws.id}" type="button">
+          <span class="name">${escapeHtml(ws.label)}</span>
+          <span class="meta">${escapeHtml(ws.path)} · ${statusText}</span>
+        </button>`;
+      })
+      .join("");
+  }
+  els.workspaceDropdown.innerHTML = dropdownRows;
+  els.workspaceDropdown.classList.toggle("open", state.workspaceDropdownOpen);
+
+  const selectedWs = getSelectedWorkspace();
+  const display = state.workspaceQuery || workspaceDisplayText(selectedWs);
+  if (els.workspaceCombo.value !== display) {
+    els.workspaceCombo.value = display;
+  }
+
+  els.workspaceCombo.disabled = list.length === 0;
+  els.workspaceComboToggle.disabled = list.length === 0;
+  els.workspaceComboToggle.setAttribute("aria-expanded", state.workspaceDropdownOpen ? "true" : "false");
   els.removeWorkspaceBtn.disabled = !list.find((ws) => ws.id === state.selectedWorkspaceId);
   els.clearWorkspacesBtn.disabled = list.length === 0;
   els.stopServiceBtn.disabled = !state.runtime?.running;
 
   const totalChanges = list.reduce((sum, ws) => sum + ws.changes.length, 0);
   const totalCaps = list.reduce((sum, ws) => sum + ws.capabilities.length, 0);
+  const okWorkspaces = list.filter((ws) => ws.status === "ok").length;
+  const brokenWorkspaces = Math.max(0, list.length - okWorkspaces);
+  const needsReviewChanges = list.reduce((sum, ws) => sum + ws.reviewQueue.filter((c) => c.needsReview).length, 0);
+  const missingArtifacts = list.reduce(
+    (sum, ws) => sum + ws.changes.reduce((acc, change) => acc + (change.missingArtifacts?.length || 0), 0),
+    0
+  );
   if (state.index?.generatedAt) {
+    const freshness = describeFreshness(state.index.generatedAt);
     els.scanMeta.innerHTML = `
-      <div class="meta-group">
-        <div class="meta-group-title">索引概览</div>
+      <div class="meta-group index-insight">
+        <div class="index-head">
+          <div class="meta-group-title">索引洞察</div>
+          ${renderMetaBadge("新鲜度", freshness.text, freshness.tone)}
+        </div>
+        <div class="index-primary">
+          <span>上次索引</span>
+          <strong>${escapeHtml(formatTs(state.index.generatedAt))}</strong>
+        </div>
         <div class="meta-badge-grid metrics">
-          ${renderMetaBadge("索引", formatTs(state.index.generatedAt), "info")}
-          ${renderMetaBadge("工作区", String(list.length))}
+          ${renderMetaBadge("工作区", `${okWorkspaces}/${list.length}`, brokenWorkspaces > 0 ? "warn" : "success")}
           ${renderMetaBadge("变更", String(totalChanges))}
+          ${renderMetaBadge("待审", String(needsReviewChanges), needsReviewChanges > 0 ? "warn" : "muted")}
+          ${renderMetaBadge("缺件", String(missingArtifacts), missingArtifacts > 0 ? "warn" : "muted")}
           ${renderMetaBadge("能力", String(totalCaps))}
         </div>
+        ${renderSyncInsight(state.sync?.summary)}
       </div>
     `;
   } else {
     els.scanMeta.innerHTML = `
-      <div class="meta-group">
-        <div class="meta-group-title">索引概览</div>
+      <div class="meta-group index-insight">
+        <div class="meta-group-title">索引洞察</div>
         <div class="meta-badge-grid metrics">
           ${renderMetaBadge("索引", "暂无", "muted")}
+          ${renderMetaBadge("工作区", String(list.length))}
+          ${renderMetaBadge("变更", String(totalChanges))}
+          ${renderMetaBadge("能力", String(totalCaps))}
         </div>
       </div>
     `;
@@ -467,20 +610,35 @@ function renderNavigation() {
     })
     .join("");
 
-  const capCards = ws.capabilities
-    .filter((cap) => matches(cap.name))
-    .map((cap) => {
-      const latest = cap.relatedChanges?.[0]?.lastModified || null;
+  const selectedChange = getSelectedChange(ws);
+  const scopedCapabilityNames = (selectedChange?.impactedCapabilities || []).filter((name) =>
+    ws.capabilities.some((cap) => cap.name === name)
+  );
+  const fallbackCapabilityNames = ws.capabilities.map((cap) => cap.name).slice(0, 8);
+  const capabilitySource = scopedCapabilityNames.length > 0 ? scopedCapabilityNames : fallbackCapabilityNames;
+  const capabilityNames = capabilitySource.filter((name) => matches(name));
+
+  const capCards = capabilityNames
+    .map((name) => {
+      const cap = getCapabilityByName(ws, name);
+      const latest = cap?.relatedChanges?.[0]?.lastModified || null;
+      const specState = getCapabilitySpecState(ws, name);
       return renderCapabilityRow({
-        capabilityName: cap.name,
+        capabilityName: name,
         workspaceId: ws.id,
-        relatedCount: cap.relatedChanges.length,
+        relatedCount: cap?.relatedChanges?.length || 0,
         latest,
-        active: state.selectedCapabilityName === cap.name,
+        extraMeta: scopedCapabilityNames.length > 0 ? "当前变更入口" : "工作区入口",
+        stateLabel: specState.label,
+        stateTone: specState.tone,
+        active: state.selectedCapabilityName === name,
         compact: true,
       });
     })
     .join("");
+
+  const multiSpecCount = ws.capabilities.filter((cap) => getCapabilitySpecState(ws, cap.name).label.startsWith("多 spec")).length;
+  const convergeCount = ws.capabilities.filter((cap) => getCapabilitySpecState(ws, cap.name).label === "多 spec 待收敛").length;
 
   els.navContent.innerHTML = `
     <h3>变更队列</h3>
@@ -488,8 +646,12 @@ function renderNavigation() {
       <div class="table-head"><span>变更</span><span>任务</span><span>最近更新</span></div>
       ${queueRows || '<p class="muted">没有匹配变更。</p>'}
     </div>
-    <h3>能力</h3>
-    <div class="cap-list">${capCards || '<p class="muted">没有匹配能力。</p>'}</div>
+    <h3>能力入口</h3>
+    <div class="cap-entry-head">
+      <span class="muted">工作区能力 ${ws.capabilities.length} · 多 spec ${multiSpecCount} · 待收敛 ${convergeCount}</span>
+      <button class="cap-jump-btn" data-cap-scope-target="workspace" type="button">在右侧浏览全部</button>
+    </div>
+    <div class="cap-list">${capCards || '<p class="muted">当前入口无匹配能力。</p>'}</div>
   `;
 }
 
@@ -636,7 +798,8 @@ function timelineTypeLabel(type) {
   return map[type] || type;
 }
 
-function renderTimelineItems() {
+function renderTimelineItems(opts = {}) {
+  const capabilityName = opts.capabilityName || null;
   const ws = getSelectedWorkspace();
   const change = getSelectedChange(ws);
   const impacted = new Set(change?.impactedCapabilities || []);
@@ -646,13 +809,21 @@ function renderTimelineItems() {
     items = items.filter((event) => !event.workspaceId || event.workspaceId === ws.id);
   }
 
-  if (change) {
+  if (capabilityName && ws) {
+    const changeIds = new Set((getCapabilityByName(ws, capabilityName)?.relatedChanges || []).map((item) => item.changeId));
+    items = items.filter(
+      (event) => event.capabilityName === capabilityName || (event.changeId && changeIds.has(event.changeId))
+    );
+    items.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+  } else if (change) {
     items.sort((a, b) => {
       const aScore = a.changeId === change.id || impacted.has(a.capabilityName) ? 1 : 0;
       const bScore = b.changeId === change.id || impacted.has(b.capabilityName) ? 1 : 0;
       if (aScore !== bScore) return bScore - aScore;
       return (b.ts || "").localeCompare(a.ts || "");
     });
+  } else {
+    items.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
   }
 
   const rows = items.slice(0, 14).map((event) => {
@@ -675,55 +846,99 @@ function renderCapabilityLens() {
   }
 
   const change = getSelectedChange(ws);
-  const impacted = (change?.impactedCapabilities || [])
-    .map((name) => {
-      const cap = getCapabilityByName(ws, name);
-      return renderCapabilityRow({
-        capabilityName: name,
-        workspaceId: ws.id,
-        relatedCount: cap?.relatedChanges?.length || 0,
-        latest: cap?.relatedChanges?.[0]?.lastModified || null,
-        extraMeta: "当前变更",
-        active: state.selectedCapabilityName === name,
+  const impactedNames = change?.impactedCapabilities || [];
+  const query = state.capabilityLensQuery.trim().toLowerCase();
+  let entries = [];
+  let scopeHint = "";
+
+  if (state.capabilityScope === "change") {
+    entries = impactedNames
+      .map((name) => {
+        const cap = getCapabilityByName(ws, name);
+        const specState = getCapabilitySpecState(ws, name);
+        return {
+          capabilityName: name,
+          workspaceId: ws.id,
+          relatedCount: cap?.relatedChanges?.length || 0,
+          latest: cap?.relatedChanges?.[0]?.lastModified || null,
+          extraMeta: "当前变更",
+          stateLabel: specState.label,
+          stateTone: specState.tone,
+          active: state.selectedCapabilityName === name,
+        };
+      })
+      .filter((item) => fuzzyMatch(`${item.capabilityName} ${item.stateLabel}`, query));
+    scopeHint = `当前变更能力 ${impactedNames.length}`;
+  } else if (state.capabilityScope === "workspace") {
+    entries = ws.capabilities
+      .map((cap) => {
+        const specState = getCapabilitySpecState(ws, cap.name);
+        return {
+          capabilityName: cap.name,
+          workspaceId: ws.id,
+          relatedCount: cap.relatedChanges.length,
+          latest: cap.relatedChanges?.[0]?.lastModified || null,
+          extraMeta: "当前工作区",
+          stateLabel: specState.label,
+          stateTone: specState.tone,
+          active: state.selectedCapabilityName === cap.name,
+        };
+      })
+      .filter((item) => fuzzyMatch(`${item.capabilityName} ${item.stateLabel}`, query));
+    scopeHint = `当前工作区能力 ${ws.capabilities.length}`;
+  } else {
+    const globalCaps = state.index?.globalCapabilities || [];
+    entries = globalCaps
+      .map((cap) => {
+        const localCap = getCapabilityByName(ws, cap.name);
+        const targetWorkspaceId =
+          localCap
+            ? ws.id
+            : cap.workspaces.find((item) => item.workspaceId === ws.id)?.workspaceId || cap.workspaces[0]?.workspaceId || ws.id;
+        const localState = getCapabilitySpecState(ws, cap.name);
+        return {
+          capabilityName: cap.name,
+          workspaceId: targetWorkspaceId,
+          relatedCount: cap.recentChanges?.length || 0,
+          latest: cap.recentChanges?.[0]?.lastModified || null,
+          extraMeta: `跨工作区 ${cap.workspaces?.length || 0}`,
+          stateLabel: localCap ? localState.label : `覆盖 ${cap.workspaces?.length || 0}`,
+          stateTone: localCap ? localState.tone : "info",
+          active: targetWorkspaceId === ws.id && state.selectedCapabilityName === cap.name,
+        };
+      })
+      .filter((item) => fuzzyMatch(`${item.capabilityName} ${item.extraMeta}`, query));
+    scopeHint = `全局能力 ${globalCaps.length}`;
+  }
+
+  const rows = entries
+    .map((item) =>
+      renderCapabilityRow({
+        ...item,
         compact: true,
-      });
-    })
+      })
+    )
     .join("");
 
-  const grouped = (state.index?.workspaces || [])
-    .map((workspace) => {
-      const capItems = workspace.capabilities
-        .map((cap) => {
-          const latest = cap.relatedChanges?.[0]?.lastModified;
-          return renderCapabilityRow({
-            capabilityName: cap.name,
-            workspaceId: workspace.id,
-            relatedCount: cap.relatedChanges.length,
-            latest,
-            active: workspace.id === ws.id && state.selectedCapabilityName === cap.name,
-            compact: true,
-          });
-        })
-        .join("");
-      return `<div class="card workspace-cap-card">
-        <strong>${escapeHtml(workspace.label)}</strong>
-        <div class="cap-list">${capItems || "<p class='muted'>暂无能力</p>"}</div>
-      </div>`;
-    })
-    .join("");
+  const timelineTitle = state.selectedCapabilityName ? `时间线（${escapeHtml(state.selectedCapabilityName)}）` : "时间线";
 
   els.lensContent.innerHTML = `
     <section class="lens-section">
-      <h3>当前变更影响能力</h3>
-      <div class="cap-list">${impacted || '<p class="muted">当前变更未标注能力。</p>'}</div>
+      <h3>能力浏览器</h3>
+      <div class="lens-toolbar">
+        <div class="segmented lens-scope-switch">
+          <button data-cap-view="change" class="${state.capabilityScope === "change" ? "active" : ""}" type="button">当前变更</button>
+          <button data-cap-view="workspace" class="${state.capabilityScope === "workspace" ? "active" : ""}" type="button">当前工作区</button>
+          <button data-cap-view="global" class="${state.capabilityScope === "global" ? "active" : ""}" type="button">全局</button>
+        </div>
+        <input id="capLensSearchInput" value="${escapeHtml(state.capabilityLensQuery)}" placeholder="筛选能力（支持模糊检索）" />
+      </div>
+      <div class="muted">${escapeHtml(scopeHint)}</div>
+      <div class="cap-list">${rows || '<p class="muted">当前视图没有匹配能力。</p>'}</div>
     </section>
     <section class="lens-section">
-      <h3>全局能力概览</h3>
-      <div class="workspace-cap-groups">${grouped || '<p class="muted">暂无工作区数据。</p>'}</div>
-    </section>
-    <section class="lens-section">
-      <h3>时间线</h3>
-      <div class="timeline-list">${renderTimelineItems()}</div>
+      <h3>${timelineTitle}</h3>
+      <div class="timeline-list">${renderTimelineItems({ capabilityName: state.selectedCapabilityName })}</div>
     </section>
   `;
 }
@@ -791,6 +1006,39 @@ function jumpToCapability(name) {
 }
 
 function bindDynamicEvents() {
+  for (const el of document.querySelectorAll("[data-cap-scope-target]")) {
+    el.addEventListener("click", () => {
+      const target = el.dataset.capScopeTarget;
+      if (!target) return;
+      state.capabilityScope = target;
+      state.capabilityLensQuery = "";
+      rerender();
+    });
+  }
+
+  for (const el of document.querySelectorAll("[data-cap-view]")) {
+    el.addEventListener("click", () => {
+      const view = el.dataset.capView;
+      if (!view) return;
+      state.capabilityScope = view;
+      rerender();
+    });
+  }
+
+  const capLensSearchInput = document.getElementById("capLensSearchInput");
+  if (capLensSearchInput) {
+    capLensSearchInput.addEventListener("input", () => {
+      state.capabilityLensQuery = capLensSearchInput.value;
+      rerender();
+    });
+  }
+
+  for (const el of document.querySelectorAll("[data-workspace-option-id]")) {
+    el.addEventListener("click", () => {
+      applyWorkspaceSelectionById(el.dataset.workspaceOptionId || "");
+    });
+  }
+
   for (const el of document.querySelectorAll("[data-change-id]")) {
     el.addEventListener("click", () => {
       state.selectedChangeId = el.dataset.changeId;
@@ -823,6 +1071,8 @@ function bindDynamicEvents() {
       const workspaceId = el.dataset.workspaceId || state.selectedWorkspaceId;
       if (workspaceId && workspaceId !== state.selectedWorkspaceId) {
         state.selectedWorkspaceId = workspaceId;
+        state.workspaceQuery = "";
+        state.workspaceDropdownOpen = false;
         state.selectedChangeId = null;
         state.selectedArtifactPath = null;
         state.compareLeftPath = null;
@@ -917,9 +1167,32 @@ function bindStaticEvents() {
     els.syncPopover.open = false;
   });
 
+  document.addEventListener("click", (event) => {
+    if (!els.workspaceMenu?.open) return;
+    if (els.workspaceMenu.contains(event.target)) return;
+    els.workspaceMenu.open = false;
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!els.workspaceComboWrap) return;
+    if (els.workspaceComboWrap.contains(event.target)) return;
+    if (!state.workspaceDropdownOpen && !state.workspaceQuery) return;
+    state.workspaceDropdownOpen = false;
+    state.workspaceQuery = "";
+    rerender();
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && els.syncPopover?.open) {
       els.syncPopover.open = false;
+    }
+    if (event.key === "Escape" && els.workspaceMenu?.open) {
+      els.workspaceMenu.open = false;
+    }
+    if (event.key === "Escape" && state.workspaceDropdownOpen) {
+      state.workspaceDropdownOpen = false;
+      state.workspaceQuery = "";
+      rerender();
     }
   });
 
@@ -928,27 +1201,58 @@ function bindStaticEvents() {
     rerender();
   });
 
-  els.workspaceSelect.addEventListener("change", () => {
-    if (!els.workspaceSelect.value) return;
-    state.selectedWorkspaceId = els.workspaceSelect.value;
-    state.selectedChangeId = null;
-    state.selectedCapabilityName = null;
-    state.selectedArtifactPath = null;
-    state.compareLeftPath = null;
-    state.compareRightPath = null;
-    state.readerFocus = "change";
+  const applyWorkspaceSelection = () => {
+    const list = state.index?.workspaces || [];
+    if (list.length === 0) return;
+    const resolvedId = resolveWorkspaceIdFromInput(els.workspaceCombo.value, list);
+    if (!resolvedId) {
+      state.workspaceQuery = els.workspaceCombo.value;
+      state.workspaceDropdownOpen = true;
+      rerender();
+      return;
+    }
+    applyWorkspaceSelectionById(resolvedId);
+  };
+
+  els.workspaceCombo.addEventListener("input", () => {
+    state.workspaceQuery = els.workspaceCombo.value;
+    state.workspaceDropdownOpen = true;
     rerender();
   });
 
-  els.workspaceSearchInput.addEventListener("input", () => {
-    state.workspaceQuery = els.workspaceSearchInput.value;
+  els.workspaceCombo.addEventListener("focus", () => {
+    if ((state.index?.workspaces || []).length === 0) return;
+    state.workspaceDropdownOpen = true;
     rerender();
   });
 
-  els.workspaceSearchInput.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
+  els.workspaceCombo.addEventListener("change", applyWorkspaceSelection);
+
+  els.workspaceComboToggle.addEventListener("click", () => {
+    if ((state.index?.workspaces || []).length === 0) return;
+    state.workspaceDropdownOpen = !state.workspaceDropdownOpen;
+    if (state.workspaceDropdownOpen) {
+      els.workspaceCombo.focus();
+    } else {
       state.workspaceQuery = "";
-      els.workspaceSearchInput.value = "";
+    }
+    rerender();
+  });
+
+  els.workspaceCombo.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyWorkspaceSelection();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      state.workspaceDropdownOpen = true;
+      rerender();
+      return;
+    }
+    if (event.key === "Escape") {
+      state.workspaceDropdownOpen = false;
+      state.workspaceQuery = "";
       rerender();
     }
   });
@@ -1013,6 +1317,8 @@ function bindStaticEvents() {
     await guarded(async () => {
       await api(`/api/workspaces/${encodeURIComponent(state.selectedWorkspaceId)}`, { method: "DELETE" });
       state.selectedWorkspaceId = null;
+      state.workspaceQuery = "";
+      state.workspaceDropdownOpen = false;
       state.selectedChangeId = null;
       state.selectedCapabilityName = null;
       state.selectedArtifactPath = null;
@@ -1025,6 +1331,8 @@ function bindStaticEvents() {
     await guarded(async () => {
       await api("/api/workspaces", { method: "DELETE" });
       state.selectedWorkspaceId = null;
+      state.workspaceQuery = "";
+      state.workspaceDropdownOpen = false;
       state.selectedChangeId = null;
       state.selectedCapabilityName = null;
       state.selectedArtifactPath = null;
