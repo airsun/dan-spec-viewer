@@ -39,3 +39,14 @@ The system SHALL support CLI installation modes that are decoupled from a local 
 #### Scenario: Optional standalone executable distribution
 - **WHEN** a prebuilt standalone executable is provided for a target platform
 - **THEN** the executable MUST expose the same command surface and registry compatibility as the Node-based CLI.
+
+### Requirement: Workspace Sync State and History
+The system SHALL persist refresh/bind related workspace events and expose recent sync history for UI status feedback.
+
+#### Scenario: Refresh workspace index
+- **WHEN** a refresh action is triggered from CLI or Web for one or more workspaces
+- **THEN** the system MUST emit a sync event record containing start/end time, scope, result status, and summary deltas.
+
+#### Scenario: Bind workspace then refresh
+- **WHEN** a new workspace is bound and indexed
+- **THEN** the system MUST record the bind and sync events in chronological order for later timeline rendering.

@@ -4,6 +4,7 @@ import http from "node:http";
 import { URL, fileURLToPath } from "node:url";
 import { addWorkspace, clearWorkspaces, loadRegistry, removeWorkspace, saveRegistry } from "./registry.js";
 import { buildIndex, saveIndexCache, loadIndexCache } from "./indexer.js";
+import { appendHistoryEvent, appendHistoryEvents, listHistoryEvents } from "./history.js";
 import { clearRuntime, clearRuntimeIfOwned, isProcessAlive, isServerHealthy, loadRuntime, saveRuntime } from "./runtime.js";
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
@@ -46,6 +47,8 @@ function getStaticType(filePath) {
   if (filePath.endsWith(".js")) return "application/javascript; charset=utf-8";
   if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
   if (filePath.endsWith(".json")) return "application/json; charset=utf-8";
+  if (filePath.endsWith(".svg")) return "image/svg+xml";
+  if (filePath.endsWith(".png")) return "image/png";
   return "text/plain; charset=utf-8";
 }
 
@@ -57,6 +60,129 @@ function sanitizeFilePath(workspacePath, relativePath) {
   return target;
 }
 
+function parseLimit(raw, fallback = 80) {
+  const n = Number.parseInt(String(raw || ""), 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, 500);
+}
+
+function pickScopedWorkspaces(index, targetWorkspaceId = null) {
+  const list = index?.workspaces || [];
+  if (!targetWorkspaceId) return list;
+  return list.filter((ws) => ws.id === targetWorkspaceId);
+}
+
+function hasChangeDiff(prev, next) {
+  if (!prev) return true;
+  if ((prev.lastModified || "") !== (next.lastModified || "")) return true;
+  if ((prev.taskProgress?.done || 0) !== (next.taskProgress?.done || 0)) return true;
+  if ((prev.taskProgress?.total || 0) !== (next.taskProgress?.total || 0)) return true;
+  if ((prev.missingArtifacts?.length || 0) !== (next.missingArtifacts?.length || 0)) return true;
+  return false;
+}
+
+function capabilityFreshness(capability) {
+  return capability?.relatedChanges?.[0]?.lastModified || null;
+}
+
+function hasCapabilityDiff(prev, next) {
+  if (!prev) return true;
+  if ((prev.currentSpecRelativePath || "") !== (next.currentSpecRelativePath || "")) return true;
+  if ((prev.relatedChanges?.length || 0) !== (next.relatedChanges?.length || 0)) return true;
+  if ((capabilityFreshness(prev) || "") !== (capabilityFreshness(next) || "")) return true;
+  return false;
+}
+
+function summarizeIndexDelta(previous, next, targetWorkspaceId = null) {
+  const oldWorkspaces = pickScopedWorkspaces(previous, targetWorkspaceId);
+  const newWorkspaces = pickScopedWorkspaces(next, targetWorkspaceId);
+  const oldMap = new Map(oldWorkspaces.map((ws) => [ws.id, ws]));
+
+  const summary = {
+    scope: targetWorkspaceId || "all",
+    workspaceCount: newWorkspaces.length,
+    changeAdded: 0,
+    changeUpdated: 0,
+    capabilityAdded: 0,
+    capabilityUpdated: 0,
+  };
+
+  for (const ws of newWorkspaces) {
+    const oldWs = oldMap.get(ws.id);
+    const oldChangeMap = new Map((oldWs?.changes || []).map((item) => [item.id, item]));
+    for (const change of ws.changes || []) {
+      const before = oldChangeMap.get(change.id);
+      if (!before) summary.changeAdded += 1;
+      else if (hasChangeDiff(before, change)) summary.changeUpdated += 1;
+    }
+
+    const oldCapMap = new Map((oldWs?.capabilities || []).map((item) => [item.name, item]));
+    for (const cap of ws.capabilities || []) {
+      const before = oldCapMap.get(cap.name);
+      if (!before) summary.capabilityAdded += 1;
+      else if (hasCapabilityDiff(before, cap)) summary.capabilityUpdated += 1;
+    }
+  }
+
+  return summary;
+}
+
+function buildDiffEvents(previous, next, targetWorkspaceId = null) {
+  const events = [];
+  const oldWorkspaces = pickScopedWorkspaces(previous, targetWorkspaceId);
+  const newWorkspaces = pickScopedWorkspaces(next, targetWorkspaceId);
+  const oldMap = new Map(oldWorkspaces.map((ws) => [ws.id, ws]));
+
+  for (const ws of newWorkspaces) {
+    const oldWs = oldMap.get(ws.id);
+    const oldChangeMap = new Map((oldWs?.changes || []).map((item) => [item.id, item]));
+
+    for (const change of ws.changes || []) {
+      const before = oldChangeMap.get(change.id);
+      if (!before || hasChangeDiff(before, change)) {
+        events.push({
+          ts: change.lastModified || next.generatedAt,
+          type: !before ? "change_added" : "change_updated",
+          status: "success",
+          workspaceId: ws.id,
+          workspaceLabel: ws.label,
+          changeId: change.id,
+          title: !before ? "新增变更" : "变更更新",
+          message: `${change.name}`,
+          summary: {
+            tasksDone: change.taskProgress?.done || 0,
+            tasksTotal: change.taskProgress?.total || 0,
+            missingArtifacts: change.missingArtifacts?.length || 0,
+          },
+        });
+      }
+    }
+
+    const oldCapMap = new Map((oldWs?.capabilities || []).map((item) => [item.name, item]));
+    for (const cap of ws.capabilities || []) {
+      const before = oldCapMap.get(cap.name);
+      if (!before || hasCapabilityDiff(before, cap)) {
+        events.push({
+          ts: capabilityFreshness(cap) || next.generatedAt,
+          type: !before ? "capability_added" : "capability_updated",
+          status: "success",
+          workspaceId: ws.id,
+          workspaceLabel: ws.label,
+          capabilityName: cap.name,
+          title: !before ? "新增能力" : "能力更新",
+          message: `${cap.name}`,
+          summary: {
+            relatedChanges: cap.relatedChanges?.length || 0,
+            hasCurrentSpec: Boolean(cap.currentSpecRelativePath),
+          },
+        });
+      }
+    }
+  }
+
+  return events.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+}
+
 export async function createWorkbenchServer(opts = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const dataDir = opts.dataDir;
@@ -65,20 +191,114 @@ export async function createWorkbenchServer(opts = {}) {
   let index = (await loadIndexCache({ cwd, dataDir })) ?? (await buildIndex(registry));
   await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
 
-  async function refreshIndex(targetWorkspaceId = null) {
-    registry = await loadRegistry({ cwd, dataDir: registry.dataDir });
-    const targetIds = targetWorkspaceId ? [targetWorkspaceId] : null;
-    const next = await buildIndex(registry, { targetWorkspaceIds: targetIds });
+  let syncState = {
+    status: "idle",
+    action: null,
+    scope: "all",
+    startedAt: null,
+    endedAt: null,
+    summary: null,
+    message: "等待同步",
+  };
 
-    if (targetWorkspaceId) {
-      const preserved = (index.workspaces || []).filter((ws) => ws.id !== targetWorkspaceId);
-      next.workspaces = [...preserved, ...next.workspaces].sort((a, b) => a.label.localeCompare(b.label));
-      next.globalCapabilities = (await buildIndex(registry)).globalCapabilities;
+  async function refreshIndex(targetWorkspaceId = null, meta = {}) {
+    const startedAt = new Date().toISOString();
+    syncState = {
+      status: "syncing",
+      action: meta.action || "refresh",
+      scope: targetWorkspaceId || "all",
+      startedAt,
+      endedAt: null,
+      summary: null,
+      message: "正在同步...",
+    };
+
+    await appendHistoryEvent(
+      {
+        ts: startedAt,
+        type: "sync_started",
+        status: "info",
+        workspaceId: targetWorkspaceId,
+        title: "开始同步",
+        message: targetWorkspaceId ? `同步工作区 ${targetWorkspaceId}` : "同步全部工作区",
+        meta,
+      },
+      { dataDir: registry.dataDir }
+    );
+
+    try {
+      registry = await loadRegistry({ cwd, dataDir: registry.dataDir });
+      const previous = index;
+      const targetIds = targetWorkspaceId ? [targetWorkspaceId] : null;
+      const next = await buildIndex(registry, { targetWorkspaceIds: targetIds });
+
+      if (targetWorkspaceId) {
+        const preserved = (index.workspaces || []).filter((ws) => ws.id !== targetWorkspaceId);
+        next.workspaces = [...preserved, ...next.workspaces].sort((a, b) => a.label.localeCompare(b.label));
+        next.globalCapabilities = (await buildIndex(registry)).globalCapabilities;
+      }
+
+      index = next;
+      await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
+
+      const summary = summarizeIndexDelta(previous, index, targetWorkspaceId);
+      const diffEvents = buildDiffEvents(previous, index, targetWorkspaceId);
+      const endedAt = new Date().toISOString();
+
+      await appendHistoryEvents(
+        [
+          ...diffEvents,
+          {
+            ts: endedAt,
+            type: "sync_completed",
+            status: "success",
+            workspaceId: targetWorkspaceId,
+            title: "同步完成",
+            message: "索引已更新",
+            summary,
+            meta,
+          },
+        ],
+        { dataDir: registry.dataDir }
+      );
+
+      syncState = {
+        status: "success",
+        action: meta.action || "refresh",
+        scope: targetWorkspaceId || "all",
+        startedAt,
+        endedAt,
+        summary,
+        message: "同步成功",
+      };
+
+      return { index, summary };
+    } catch (error) {
+      const endedAt = new Date().toISOString();
+      syncState = {
+        status: "failed",
+        action: meta.action || "refresh",
+        scope: targetWorkspaceId || "all",
+        startedAt,
+        endedAt,
+        summary: null,
+        message: error.message || "同步失败",
+      };
+
+      await appendHistoryEvent(
+        {
+          ts: endedAt,
+          type: "sync_failed",
+          status: "failed",
+          workspaceId: targetWorkspaceId,
+          title: "同步失败",
+          message: error.message || "同步失败",
+          meta,
+        },
+        { dataDir: registry.dataDir }
+      );
+      throw error;
     }
-
-    index = next;
-    await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
-    return index;
   }
 
   const server = http.createServer(async (req, res) => {
@@ -92,6 +312,79 @@ export async function createWorkbenchServer(opts = {}) {
           globalCapabilityCount: index.globalCapabilities.length,
           workspaces: index.workspaces,
           globalCapabilities: index.globalCapabilities,
+        });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/sync/status") {
+        const recentEvents = await listHistoryEvents({
+          dataDir: registry.dataDir,
+          limit: parseLimit(url.searchParams.get("limit"), 30),
+        });
+        return json(res, 200, {
+          sync: syncState,
+          recentEvents,
+        });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/timeline") {
+        const events = await listHistoryEvents({
+          dataDir: registry.dataDir,
+          limit: parseLimit(url.searchParams.get("limit"), 100),
+          workspaceId: url.searchParams.get("workspaceId") || undefined,
+          changeId: url.searchParams.get("changeId") || undefined,
+          capabilityName: url.searchParams.get("capabilityName") || undefined,
+          type: url.searchParams.get("type") || undefined,
+        });
+        return json(res, 200, { events });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/sync") {
+        const body = await readJsonBody(req);
+        const targetPath = typeof body.path === "string" ? body.path.trim() : "";
+
+        if (targetPath) {
+          const result = await addWorkspace(targetPath, {
+            cwd,
+            dataDir: registry.dataDir,
+            label: body.label,
+          });
+          registry = result.registry;
+
+          await appendHistoryEvent(
+            {
+              type: result.created ? "workspace_bound" : "workspace_reused",
+              status: "success",
+              workspaceId: result.workspace.id,
+              workspaceLabel: result.workspace.label,
+              title: result.created ? "绑定工作区" : "复用已绑定工作区",
+              message: result.workspace.path,
+            },
+            { dataDir: registry.dataDir }
+          );
+
+          const synced = await refreshIndex(result.workspace.id, {
+            source: "sync_center",
+            action: "bind_refresh",
+          });
+
+          return json(res, 200, {
+            ok: true,
+            created: result.created,
+            workspace: result.workspace,
+            summary: synced.summary,
+            sync: syncState,
+          });
+        }
+
+        const targetWorkspaceId = typeof body.workspaceId === "string" ? body.workspaceId : null;
+        const synced = await refreshIndex(targetWorkspaceId, {
+          source: "sync_center",
+          action: targetWorkspaceId ? "refresh_workspace" : "refresh_all",
+        });
+        return json(res, 200, {
+          ok: true,
+          summary: synced.summary,
+          sync: syncState,
         });
       }
 
@@ -116,6 +409,18 @@ export async function createWorkbenchServer(opts = {}) {
         registry = result.registry;
         index = await buildIndex(registry);
         await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
+
+        await appendHistoryEvent(
+          {
+            type: "workspace_clear",
+            status: "success",
+            title: "清空工作区",
+            message: `移除 ${result.removedCount} 个工作区`,
+            summary: { removedCount: result.removedCount },
+          },
+          { dataDir: registry.dataDir }
+        );
+
         return json(res, 200, { removedCount: result.removedCount });
       }
 
@@ -124,16 +429,35 @@ export async function createWorkbenchServer(opts = {}) {
         if (!body.path || typeof body.path !== "string") {
           return json(res, 400, { error: "path is required" });
         }
+
         const result = await addWorkspace(body.path, {
           cwd,
           dataDir: registry.dataDir,
           label: body.label,
         });
         registry = result.registry;
-        await refreshIndex(result.workspace.id);
+
+        await appendHistoryEvent(
+          {
+            type: result.created ? "workspace_bound" : "workspace_reused",
+            status: "success",
+            workspaceId: result.workspace.id,
+            workspaceLabel: result.workspace.label,
+            title: result.created ? "绑定工作区" : "复用已绑定工作区",
+            message: result.workspace.path,
+          },
+          { dataDir: registry.dataDir }
+        );
+
+        const synced = await refreshIndex(result.workspace.id, {
+          source: "legacy_workspaces_api",
+          action: "bind_refresh",
+        });
+
         return json(res, 200, {
           created: result.created,
           workspace: result.workspace,
+          summary: synced.summary,
         });
       }
 
@@ -144,16 +468,31 @@ export async function createWorkbenchServer(opts = {}) {
         if (result.removed) {
           index = await buildIndex(registry);
           await saveIndexCache(index, { cwd, dataDir: registry.dataDir });
+
+          await appendHistoryEvent(
+            {
+              type: "workspace_unbound",
+              status: "success",
+              workspaceId: id,
+              title: "解绑工作区",
+              message: id,
+            },
+            { dataDir: registry.dataDir }
+          );
         }
         return json(res, 200, { removed: result.removed });
       }
 
       if (req.method === "POST" && url.pathname === "/api/workspaces/refresh") {
         const body = await readJsonBody(req);
-        await refreshIndex(body.workspaceId || null);
+        const synced = await refreshIndex(body.workspaceId || null, {
+          source: "legacy_refresh_api",
+          action: body.workspaceId ? "refresh_workspace" : "refresh_all",
+        });
         return json(res, 200, {
           ok: true,
           generatedAt: index.generatedAt,
+          summary: synced.summary,
         });
       }
 
@@ -174,6 +513,16 @@ export async function createWorkbenchServer(opts = {}) {
         if (!runtime) {
           return json(res, 200, { stopped: false, reason: "no_runtime" });
         }
+
+        await appendHistoryEvent(
+          {
+            type: "service_stop_requested",
+            status: "info",
+            title: "请求停止服务",
+            message: `pid ${runtime.pid}`,
+          },
+          { dataDir: registry.dataDir }
+        );
 
         if (runtime.pid === process.pid) {
           json(res, 200, { stopped: true, self: true, pid: runtime.pid });
@@ -271,8 +620,11 @@ export async function createWorkbenchServer(opts = {}) {
     getRegistry() {
       return registry;
     },
+    getSyncState() {
+      return syncState;
+    },
     async refreshIndex(workspaceId = null) {
-      return refreshIndex(workspaceId);
+      return refreshIndex(workspaceId, { source: "server_handle", action: "refresh" });
     },
     async saveRegistry() {
       await saveRegistry(registry);

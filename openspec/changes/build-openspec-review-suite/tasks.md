@@ -28,3 +28,20 @@
 - [x] 5.1 Validate no-edit constraint: all views are read-only.
 - [x] 5.2 Validate navigation and reading behavior against spec scenarios.
 - [x] 5.3 Perform end-to-end review flow checks for at least one multi-workspace setup.
+
+## 6. UI Hierarchy Refinement (Read > Select > Control)
+
+- [x] 6.1 De-emphasize low-frequency operations by moving `unbind` and `stop service` into a secondary workspace actions area.
+- [x] 6.2 Reduce `Bind Workspace` interruption to the primary reading surface (later converged into Sync Center).
+- [x] 6.3 Tighten typography and control sizing to reduce panel density while preserving readability.
+- [x] 6.4 Increase prominence of high-frequency objects (`Change`, `Capability`, `File`) in navigation and reading flow.
+- [x] 6.5 Verify new interaction flow keeps primary review actions within two steps.
+
+## 7. Sync Center, Timeline, and Localization
+
+- [x] 7.1 Replace separate bind area with unified Sync Center that combines bind + refresh actions.
+- [x] 7.2 Add visible sync state feedback (idle/syncing/success/failed) and operation summary in UI.
+- [x] 7.3 Persist and expose timeline events for bind/refresh/change/capability updates via API.
+- [x] 7.4 Enrich change/capability cards with timeline-related metadata (recent updates and event summaries).
+- [x] 7.5 Localize primary UI text to Chinese and add optional logo rendering with text fallback.
+- [x] 7.6 Verify sync status flow, timeline rendering, and Chinese UI behavior end-to-end.

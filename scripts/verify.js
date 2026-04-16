@@ -62,6 +62,21 @@ async function main() {
   });
   assert.equal(refreshed.ok, true, "refresh endpoint should succeed");
 
+  const syncResp = await fetchJson(`${base}/api/sync`, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId: wsAApi.id }),
+  });
+  assert.equal(syncResp.ok, true, "sync endpoint should succeed");
+  assert.ok(syncResp.summary, "sync endpoint should return summary");
+
+  const syncStatus = await fetchJson(`${base}/api/sync/status`);
+  assert.equal(syncStatus.sync.status, "success", "sync status should become success");
+  assert.ok(Array.isArray(syncStatus.recentEvents), "sync status should return recent events");
+
+  const timeline = await fetchJson(`${base}/api/timeline?limit=20`);
+  assert.ok(Array.isArray(timeline.events), "timeline endpoint should return event list");
+  assert.ok(timeline.events.length > 0, "timeline should include at least one event after sync");
+
   const removeResp = await fetchJson(`${base}/api/workspaces/${encodeURIComponent(wsAApi.id)}`, {
     method: "DELETE",
   });

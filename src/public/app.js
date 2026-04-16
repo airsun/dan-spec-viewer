@@ -1,9 +1,13 @@
 const state = {
   index: null,
   runtime: null,
+  sync: null,
+  timeline: [],
   selectedWorkspaceId: null,
   navMode: "cards",
+  navQuery: "",
   readerMode: "story",
+  readerFocus: "change",
   selectedChangeId: null,
   selectedArtifactPath: null,
   compareLeftPath: null,
@@ -18,21 +22,26 @@ const els = {
   stopServiceBtn: document.getElementById("stopServiceBtn"),
   addWorkspacePath: document.getElementById("addWorkspacePath"),
   addWorkspaceLabel: document.getElementById("addWorkspaceLabel"),
-  addWorkspaceBtn: document.getElementById("addWorkspaceBtn"),
+  syncAddBtn: document.getElementById("syncAddBtn"),
+  refreshWorkspaceBtn: document.getElementById("refreshWorkspaceBtn"),
   refreshAllBtn: document.getElementById("refreshAllBtn"),
+  syncStateBadge: document.getElementById("syncStateBadge"),
+  syncStateText: document.getElementById("syncStateText"),
   scanMeta: document.getElementById("scanMeta"),
   runtimeMeta: document.getElementById("runtimeMeta"),
   modeCardsBtn: document.getElementById("modeCardsBtn"),
   modeFilesBtn: document.getElementById("modeFilesBtn"),
+  navSearchInput: document.getElementById("navSearchInput"),
   viewStoryBtn: document.getElementById("viewStoryBtn"),
   viewCompareBtn: document.getElementById("viewCompareBtn"),
   navContent: document.getElementById("navContent"),
   readerContent: document.getElementById("readerContent"),
   lensContent: document.getElementById("lensContent"),
+  brandLogo: document.getElementById("brandLogo"),
 };
 
 function escapeHtml(value) {
-  return value
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -40,8 +49,15 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function formatTs(ts) {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
 function renderMarkdown(md) {
-  const lines = md.split(/\r?\n/);
+  const lines = String(md || "").split(/\r?\n/);
   let html = "";
   let inCode = false;
   let inList = false;
@@ -99,14 +115,12 @@ function renderMarkdown(md) {
   }
 
   closeList();
-  if (inCode) {
-    html += "</code></pre>";
-  }
+  if (inCode) html += "</code></pre>";
   return `<div class="markdown">${html}</div>`;
 }
 
-function api(path, options = {}) {
-  return fetch(path, {
+function api(url, options = {}) {
+  return fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -127,7 +141,7 @@ function getSelectedWorkspace() {
 
 function getSelectedChange(workspace) {
   if (!workspace) return null;
-  return workspace.changes.find((c) => c.id === state.selectedChangeId) || null;
+  return workspace.changes.find((item) => item.id === state.selectedChangeId) || null;
 }
 
 function getChangeArtifacts(change) {
@@ -141,12 +155,27 @@ function getChangeArtifacts(change) {
   });
 }
 
+function pickDefaultComparePaths(artifacts) {
+  const byType = (type) => artifacts.find((item) => item.type === type)?.relativePath;
+  const preferredLeft = byType("design") || artifacts[0]?.relativePath || null;
+  const preferredRight =
+    byType("tasks") || artifacts.find((item) => item.relativePath !== preferredLeft)?.relativePath || preferredLeft;
+  return { preferredLeft, preferredRight };
+}
+
+function findChangeByArtifactPath(workspace, relativePath) {
+  if (!workspace || !relativePath) return null;
+  return workspace.changes.find((change) =>
+    change.artifacts.some((artifact) => artifact.relativePath === relativePath)
+  );
+}
+
 async function loadFile(workspaceId, relativePath) {
   const key = `${workspaceId}:${relativePath}`;
-  if (state.fileCache.has(key)) {
-    return state.fileCache.get(key);
-  }
-  const data = await api(`/api/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(relativePath)}`);
+  if (state.fileCache.has(key)) return state.fileCache.get(key);
+  const data = await api(
+    `/api/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(relativePath)}`
+  );
   state.fileCache.set(key, data.content);
   return data.content;
 }
@@ -155,29 +184,59 @@ function setDefaultSelection() {
   const ws = getSelectedWorkspace();
   if (!ws) return;
 
-  if (!ws.changes.find((c) => c.id === state.selectedChangeId)) {
+  if (!ws.changes.find((item) => item.id === state.selectedChangeId)) {
     state.selectedChangeId = (ws.reviewQueue[0] || ws.changes[0] || {}).id || null;
   }
+
+  const fileExists = ws.files.some((file) => file.relativePath === state.selectedArtifactPath);
+  if (state.readerFocus === "file" && fileExists) return;
 
   const change = getSelectedChange(ws);
   const artifacts = getChangeArtifacts(change);
   if (artifacts.length === 0) {
-    state.selectedArtifactPath = null;
     state.compareLeftPath = null;
     state.compareRightPath = null;
+    if (!fileExists) state.selectedArtifactPath = ws.files[0]?.relativePath || null;
     return;
   }
 
-  const paths = new Set(artifacts.map((a) => a.relativePath));
+  const paths = new Set(artifacts.map((item) => item.relativePath));
   if (!paths.has(state.selectedArtifactPath)) {
     state.selectedArtifactPath = artifacts[0].relativePath;
   }
-  if (!paths.has(state.compareLeftPath)) {
-    state.compareLeftPath = artifacts[0].relativePath;
-  }
-  if (!paths.has(state.compareRightPath)) {
-    state.compareRightPath = artifacts[Math.min(1, artifacts.length - 1)].relativePath;
-  }
+
+  const defaults = pickDefaultComparePaths(artifacts);
+  if (!paths.has(state.compareLeftPath)) state.compareLeftPath = defaults.preferredLeft;
+  if (!paths.has(state.compareRightPath)) state.compareRightPath = defaults.preferredRight;
+}
+
+function mapSyncSummary(summary) {
+  if (!summary) return "无增量变化";
+  return `工作区 ${summary.workspaceCount || 0} · 新增变更 ${summary.changeAdded || 0} · 变更更新 ${summary.changeUpdated || 0} · 新增能力 ${summary.capabilityAdded || 0} · 能力更新 ${summary.capabilityUpdated || 0}`;
+}
+
+function renderSyncState() {
+  const sync = state.sync || { status: "idle", message: "等待同步操作", summary: null };
+  const statusToText = {
+    idle: "空闲",
+    syncing: "同步中",
+    success: "成功",
+    failed: "失败",
+  };
+
+  els.syncStateBadge.className = "sync-badge";
+  els.syncStateBadge.classList.add(`state-${sync.status || "idle"}`);
+  els.syncStateBadge.textContent = statusToText[sync.status] || "空闲";
+
+  const message = sync.message || "等待同步操作";
+  const summary = mapSyncSummary(sync.summary);
+  const endedAt = sync.endedAt ? `（${formatTs(sync.endedAt)}）` : "";
+  els.syncStateText.textContent = `${message} · ${summary} ${endedAt}`.trim();
+
+  const syncing = sync.status === "syncing";
+  els.syncAddBtn.disabled = syncing;
+  els.refreshAllBtn.disabled = syncing;
+  els.refreshWorkspaceBtn.disabled = syncing || !state.selectedWorkspaceId;
 }
 
 function renderWorkspaceBar() {
@@ -187,100 +246,169 @@ function renderWorkspaceBar() {
   for (const ws of list) {
     const opt = document.createElement("option");
     opt.value = ws.id;
-    opt.textContent = `${ws.label} (${ws.status})`;
+    opt.textContent = `${ws.label}（${ws.status === "ok" ? "可读" : "异常"}）`;
     els.workspaceSelect.appendChild(opt);
   }
 
   if (!list.find((ws) => ws.id === state.selectedWorkspaceId)) {
     state.selectedWorkspaceId = list[0]?.id || null;
   }
-
   if (state.selectedWorkspaceId) {
     els.workspaceSelect.value = state.selectedWorkspaceId;
   }
 
-  els.scanMeta.textContent = state.index?.generatedAt ? `Last index: ${state.index.generatedAt}` : "";
+  els.workspaceSelect.disabled = list.length === 0;
+  els.removeWorkspaceBtn.disabled = !state.selectedWorkspaceId;
+  els.clearWorkspacesBtn.disabled = list.length === 0;
+  els.stopServiceBtn.disabled = !state.runtime?.running;
+
+  const totalChanges = list.reduce((sum, ws) => sum + ws.changes.length, 0);
+  const totalCaps = list.reduce((sum, ws) => sum + ws.capabilities.length, 0);
+  els.scanMeta.textContent = state.index?.generatedAt
+    ? `索引时间 ${formatTs(state.index.generatedAt)} · 工作区 ${list.length} · 变更 ${totalChanges} · 能力 ${totalCaps}`
+    : "暂无索引";
+
   if (!state.runtime?.runtime) {
-    els.runtimeMeta.textContent = "Service: stopped";
+    els.runtimeMeta.textContent = "服务状态：未运行";
   } else if (state.runtime.running) {
-    els.runtimeMeta.textContent = `Service: running on :${state.runtime.runtime.port}`;
+    els.runtimeMeta.textContent = `服务状态：运行中（端口 ${state.runtime.runtime.port}，pid ${state.runtime.runtime.pid}）`;
   } else {
-    els.runtimeMeta.textContent = `Service: stale runtime (pid=${state.runtime.runtime.pid})`;
+    els.runtimeMeta.textContent = `服务状态：运行信息失效（pid ${state.runtime.runtime.pid}）`;
   }
 }
 
 function renderNavigation() {
   const ws = getSelectedWorkspace();
   if (!ws) {
-    els.navContent.innerHTML = '<p class="muted">No workspace selected.</p>';
+    els.navContent.innerHTML = '<p class="muted">未选择工作区。</p>';
     return;
   }
+
+  const query = state.navQuery.trim().toLowerCase();
+  const matches = (value) => !query || String(value || "").toLowerCase().includes(query);
 
   if (state.navMode === "files") {
     const rows = ws.files
-      .map(
-        (file) => `<button class="file-item" data-open-file="${file.relativePath}">${file.relativePath}</button>`
-      )
+      .filter((file) => matches(file.relativePath))
+      .map((file) => {
+        const active = state.readerFocus === "file" && file.relativePath === state.selectedArtifactPath ? "active" : "";
+        const type = file.relativePath.includes("/changes/") ? "变更工件" : "能力规格";
+        const token = encodeURIComponent(file.relativePath);
+        return `<button class="file-row ${active}" data-open-file="${token}">
+          <span class="truncate">${escapeHtml(file.relativePath)}</span>
+          <span class="muted">${type}</span>
+        </button>`;
+      })
       .join("");
-    els.navContent.innerHTML = `<div>${rows || '<p class="muted">No files.</p>'}</div>`;
+
+    els.navContent.innerHTML = `
+      <h3>文件</h3>
+      <div class="file-table">
+        <div class="table-head"><span>路径</span><span>类型</span></div>
+        ${rows || '<p class="muted">没有匹配文件。</p>'}
+      </div>
+    `;
     return;
   }
 
-  const queueCards = ws.reviewQueue
+  const queueRows = ws.reviewQueue
+    .filter((change) => {
+      if (!query) return true;
+      if (matches(change.name)) return true;
+      if (change.impactedCapabilities?.some((cap) => matches(cap))) return true;
+      return change.artifacts.some((artifact) => matches(artifact.relativePath));
+    })
     .map((change) => {
-      const active = change.id === state.selectedChangeId ? "active" : "";
+      const active = state.readerFocus === "change" && change.id === state.selectedChangeId ? "active" : "";
       const progress = `${change.taskProgress.done}/${change.taskProgress.total}`;
-      const warn = change.needsReview ? '<span class="badge warn">Needs Review</span>' : '<span class="badge">Stable</span>';
+      const status = change.needsReview
+        ? '<span class="badge warn">待审阅</span>'
+        : '<span class="badge">稳定</span>';
       const missing =
         change.missingArtifacts.length > 0
-          ? `<span class="badge error">Missing: ${change.missingArtifacts.join(", ")}</span>`
-          : "";
-      return `<div class="card ${active}" data-change-id="${change.id}">
-        <strong>${change.name}</strong>
-        <div class="muted">tasks ${progress}</div>
-        <div class="badges">${warn}${missing}</div>
-      </div>`;
+          ? `<span class="badge error">缺 ${change.missingArtifacts.length}</span>`
+          : '<span class="badge">工件完整</span>';
+
+      return `<button class="queue-row ${active}" data-change-id="${change.id}">
+        <span class="truncate"><strong>${escapeHtml(change.name)}</strong></span>
+        <span class="mono">${progress}</span>
+        <span>
+          <span class="muted">${formatTs(change.lastModified)}</span>
+          <span class="badges">${status}${missing}</span>
+        </span>
+      </button>`;
     })
     .join("");
 
-  const capabilityCards = ws.capabilities
+  const capCards = ws.capabilities
+    .filter((cap) => matches(cap.name))
     .map((cap) => {
+      const latest = cap.relatedChanges?.[0]?.lastModified || null;
       return `<button class="card link-btn" data-capability-name="${cap.name}">
-        <strong>${cap.name}</strong>
-        <div class="muted">changes: ${cap.relatedChanges.length}</div>
+        <strong>${escapeHtml(cap.name)}</strong>
+        <div class="muted">关联变更 ${cap.relatedChanges.length} · 最近 ${formatTs(latest)}</div>
       </button>`;
     })
     .join("");
 
   els.navContent.innerHTML = `
-    <h3>Review Queue (Change-first)</h3>
-    <div>${queueCards || '<p class="muted">No changes found.</p>'}</div>
-    <h3>Capabilities</h3>
-    <div>${capabilityCards || '<p class="muted">No capabilities found.</p>'}</div>
+    <h3>变更队列</h3>
+    <div class="queue-table">
+      <div class="table-head"><span>变更</span><span>任务</span><span>最近更新</span></div>
+      ${queueRows || '<p class="muted">没有匹配变更。</p>'}
+    </div>
+    <h3>能力</h3>
+    <div>${capCards || '<p class="muted">没有匹配能力。</p>'}</div>
   `;
 }
 
-async function renderStoryReader(ws, change) {
+async function renderFileStoryReader(ws) {
+  const selectedPath = state.selectedArtifactPath;
+  if (!selectedPath) {
+    els.readerContent.innerHTML = '<p class="muted">请先在文件列表中选择一个文件。</p>';
+    return;
+  }
+
+  let content = "";
+  try {
+    content = await loadFile(ws.id, selectedPath);
+  } catch (error) {
+    content = `读取失败：${error.message}`;
+  }
+
+  const mappedChange = findChangeByArtifactPath(ws, selectedPath);
+  const mappedHint = mappedChange ? `所属变更：${escapeHtml(mappedChange.name)}` : "独立规格文件";
+
+  els.readerContent.innerHTML = `
+    <div class="card">
+      <strong>${escapeHtml(selectedPath)}</strong>
+      <div class="muted">${mappedHint}</div>
+    </div>
+    <div class="preview-pane">${renderMarkdown(content)}</div>
+  `;
+}
+
+async function renderChangeStoryReader(ws, change) {
   if (!change) {
-    els.readerContent.innerHTML = '<p class="muted">Select a change to read.</p>';
+    els.readerContent.innerHTML = '<p class="muted">请选择一个变更开始阅读。</p>';
     return;
   }
 
   const artifacts = getChangeArtifacts(change);
   if (artifacts.length === 0) {
-    els.readerContent.innerHTML = '<p class="muted">No artifacts in this change.</p>';
+    els.readerContent.innerHTML = '<p class="muted">该变更暂无可读工件。</p>';
     return;
   }
 
-  const selected = artifacts.find((a) => a.relativePath === state.selectedArtifactPath) || artifacts[0];
+  const selected = artifacts.find((item) => item.relativePath === state.selectedArtifactPath) || artifacts[0];
   state.selectedArtifactPath = selected.relativePath;
 
   const nav = artifacts
     .map((artifact) => {
       const active = artifact.relativePath === selected.relativePath ? "active" : "";
       return `<button class="card link-btn ${active}" data-artifact-path="${artifact.relativePath}">
-        <strong>${artifact.title}</strong>
-        <div class="muted">${artifact.relativePath}</div>
+        <strong>${escapeHtml(artifact.title)}</strong>
+        <div class="muted">${escapeHtml(artifact.relativePath)}</div>
       </button>`;
     })
     .join("");
@@ -289,11 +417,10 @@ async function renderStoryReader(ws, change) {
   try {
     content = await loadFile(ws.id, selected.relativePath);
   } catch (error) {
-    content = `Failed to load file: ${error.message}`;
+    content = `读取失败：${error.message}`;
   }
 
   els.readerContent.innerHTML = `
-    <div class="readonly">Read-only preview</div>
     <div class="reader-grid">
       <div>${nav}</div>
       <div class="preview-pane">${renderMarkdown(content)}</div>
@@ -301,45 +428,54 @@ async function renderStoryReader(ws, change) {
   `;
 }
 
+async function renderStoryReader(ws, change) {
+  if (state.readerFocus === "file") {
+    await renderFileStoryReader(ws);
+    return;
+  }
+  await renderChangeStoryReader(ws, change);
+}
+
 async function renderCompareReader(ws, change) {
   if (!change) {
-    els.readerContent.innerHTML = '<p class="muted">Select a change to compare artifacts.</p>';
+    els.readerContent.innerHTML = '<p class="muted">请选择一个变更进行并排对照。</p>';
     return;
   }
 
   const artifacts = getChangeArtifacts(change);
   if (artifacts.length === 0) {
-    els.readerContent.innerHTML = '<p class="muted">No artifacts in this change.</p>';
+    els.readerContent.innerHTML = '<p class="muted">该变更暂无可对照工件。</p>';
     return;
   }
 
-  const options = artifacts
-    .map((artifact) => `<option value="${artifact.relativePath}">${artifact.title}</option>`)
-    .join("");
+  const defaults = pickDefaultComparePaths(artifacts);
+  const leftPath = state.compareLeftPath || defaults.preferredLeft;
+  const rightPath = state.compareRightPath || defaults.preferredRight;
 
-  const leftPath = state.compareLeftPath || artifacts[0].relativePath;
-  const rightPath = state.compareRightPath || artifacts[Math.min(1, artifacts.length - 1)].relativePath;
+  const options = artifacts
+    .map((artifact) => `<option value="${artifact.relativePath}">${escapeHtml(artifact.title)}</option>`)
+    .join("");
 
   let left = "";
   let right = "";
   try {
     left = await loadFile(ws.id, leftPath);
   } catch (error) {
-    left = `Failed to load left artifact: ${error.message}`;
+    left = `左侧读取失败：${error.message}`;
   }
   try {
     right = await loadFile(ws.id, rightPath);
   } catch (error) {
-    right = `Failed to load right artifact: ${error.message}`;
+    right = `右侧读取失败：${error.message}`;
   }
 
   els.readerContent.innerHTML = `
-    <div class="readonly">Read-only compare view</div>
     <div class="compare-controls">
-      <label>Left</label>
+      <label>左侧</label>
       <select id="leftSelect">${options}</select>
-      <label>Right</label>
+      <label>右侧</label>
       <select id="rightSelect">${options}</select>
+      <button id="compareSwapBtn" type="button">互换</button>
     </div>
     <div class="compare-grid">
       <div class="compare-pane">${renderMarkdown(left)}</div>
@@ -351,39 +487,89 @@ async function renderCompareReader(ws, change) {
   document.getElementById("rightSelect").value = rightPath;
 }
 
+function timelineTypeLabel(type) {
+  const map = {
+    workspace_bound: "绑定工作区",
+    workspace_reused: "复用工作区",
+    workspace_unbound: "解绑工作区",
+    workspace_clear: "清空工作区",
+    sync_started: "开始同步",
+    sync_completed: "同步完成",
+    sync_failed: "同步失败",
+    change_added: "新增变更",
+    change_updated: "变更更新",
+    capability_added: "新增能力",
+    capability_updated: "能力更新",
+    service_stop_requested: "请求停止服务",
+  };
+  return map[type] || type;
+}
+
+function renderTimelineItems() {
+  const ws = getSelectedWorkspace();
+  const change = getSelectedChange(ws);
+  const impacted = new Set(change?.impactedCapabilities || []);
+
+  let items = [...state.timeline];
+  if (ws) {
+    items = items.filter((event) => !event.workspaceId || event.workspaceId === ws.id);
+  }
+
+  if (change) {
+    items.sort((a, b) => {
+      const aScore = a.changeId === change.id || impacted.has(a.capabilityName) ? 1 : 0;
+      const bScore = b.changeId === change.id || impacted.has(b.capabilityName) ? 1 : 0;
+      if (aScore !== bScore) return bScore - aScore;
+      return (b.ts || "").localeCompare(a.ts || "");
+    });
+  }
+
+  const rows = items.slice(0, 14).map((event) => {
+    const message = event.message ? ` · ${escapeHtml(event.message)}` : "";
+    const scope = event.workspaceLabel ? ` · ${escapeHtml(event.workspaceLabel)}` : "";
+    return `<div class="timeline-item">
+      <div class="title">${timelineTypeLabel(event.type)}</div>
+      <div class="meta">${formatTs(event.ts)}${scope}${message}</div>
+    </div>`;
+  });
+
+  return rows.join("") || '<p class="muted">暂无时间线事件。</p>';
+}
+
 function renderCapabilityLens() {
   const ws = getSelectedWorkspace();
   if (!ws) {
-    els.lensContent.innerHTML = '<p class="muted">No workspace selected.</p>';
+    els.lensContent.innerHTML = '<p class="muted">未选择工作区。</p>';
     return;
   }
 
   const change = getSelectedChange(ws);
   const impacted = (change?.impactedCapabilities || [])
-    .map(
-      (name) => `<button class="link-btn" data-capability-name="${name}">- ${name}</button>`
-    )
+    .map((name) => `<button class="link-btn" data-capability-name="${name}">- ${escapeHtml(name)}</button>`)
     .join("");
 
-  const groupedByWorkspace = (state.index?.workspaces || [])
+  const grouped = (state.index?.workspaces || [])
     .map((workspace) => {
       const capItems = workspace.capabilities
-        .map(
-          (cap) => `<li><button class="link-btn" data-capability-name="${cap.name}">${cap.name}</button></li>`
-        )
+        .map((cap) => {
+          const latest = cap.relatedChanges?.[0]?.lastModified;
+          return `<li><button class="link-btn" data-capability-name="${cap.name}">${escapeHtml(cap.name)} <span class="muted">${formatTs(latest)}</span></button></li>`;
+        })
         .join("");
       return `<div class="card">
-        <strong>${workspace.label}</strong>
-        <ul>${capItems || "<li class='muted'>No capabilities</li>"}</ul>
+        <strong>${escapeHtml(workspace.label)}</strong>
+        <ul>${capItems || "<li class='muted'>暂无能力</li>"}</ul>
       </div>`;
     })
     .join("");
 
   els.lensContent.innerHTML = `
-    <h3>Impacted by Current Change</h3>
-    <div>${impacted || '<p class="muted">No impacted capability.</p>'}</div>
-    <h3>Global Capability Overview</h3>
-    <div>${groupedByWorkspace || '<p class="muted">No workspace data.</p>'}</div>
+    <h3>当前变更影响能力</h3>
+    <div>${impacted || '<p class="muted">当前变更未标注能力。</p>'}</div>
+    <h3>全局能力概览</h3>
+    <div>${grouped || '<p class="muted">暂无工作区数据。</p>'}</div>
+    <h3>时间线</h3>
+    <div class="timeline-list">${renderTimelineItems()}</div>
   `;
 }
 
@@ -391,7 +577,7 @@ async function renderReader() {
   const ws = getSelectedWorkspace();
   const change = getSelectedChange(ws);
   if (!ws) {
-    els.readerContent.innerHTML = '<p class="muted">No workspace selected.</p>';
+    els.readerContent.innerHTML = '<p class="muted">未选择工作区。</p>';
     return;
   }
 
@@ -402,16 +588,6 @@ async function renderReader() {
   }
 }
 
-async function rerender() {
-  setDefaultSelection();
-  renderWorkspaceBar();
-  renderNavigation();
-  renderCapabilityLens();
-  await renderReader();
-  bindDynamicEvents();
-  syncButtonStates();
-}
-
 function syncButtonStates() {
   els.modeCardsBtn.classList.toggle("active", state.navMode === "cards");
   els.modeFilesBtn.classList.toggle("active", state.navMode === "files");
@@ -419,23 +595,38 @@ function syncButtonStates() {
   els.viewCompareBtn.classList.toggle("active", state.readerMode === "compare");
 }
 
+async function rerender() {
+  setDefaultSelection();
+  renderWorkspaceBar();
+  renderSyncState();
+  renderNavigation();
+  renderCapabilityLens();
+  await renderReader();
+  bindDynamicEvents();
+  syncButtonStates();
+}
+
 function jumpToCapability(name) {
   const ws = getSelectedWorkspace();
   if (!ws) return;
 
-  const change = getSelectedChange(ws);
-  const fromChange = getChangeArtifacts(change).find((artifact) => artifact.type === "spec" && artifact.capability === name);
-  if (fromChange) {
-    state.selectedArtifactPath = fromChange.relativePath;
-    state.readerMode = "story";
-    rerender();
-    return;
+  for (const candidate of ws.changes) {
+    const hit = getChangeArtifacts(candidate).find((artifact) => artifact.type === "spec" && artifact.capability === name);
+    if (hit) {
+      state.selectedChangeId = candidate.id;
+      state.selectedArtifactPath = hit.relativePath;
+      state.readerMode = "story";
+      state.readerFocus = "change";
+      rerender();
+      return;
+    }
   }
 
-  const capability = ws.capabilities.find((item) => item.name === name);
-  if (capability?.currentSpecRelativePath) {
-    state.selectedArtifactPath = capability.currentSpecRelativePath;
+  const cap = ws.capabilities.find((item) => item.name === name);
+  if (cap?.currentSpecRelativePath) {
+    state.selectedArtifactPath = cap.currentSpecRelativePath;
     state.readerMode = "story";
+    state.readerFocus = "file";
     rerender();
   }
 }
@@ -445,6 +636,7 @@ function bindDynamicEvents() {
     el.addEventListener("click", () => {
       state.selectedChangeId = el.dataset.changeId;
       state.readerMode = "story";
+      state.readerFocus = "change";
       rerender();
     });
   }
@@ -452,14 +644,16 @@ function bindDynamicEvents() {
   for (const el of document.querySelectorAll("[data-artifact-path]")) {
     el.addEventListener("click", () => {
       state.selectedArtifactPath = el.dataset.artifactPath;
+      state.readerFocus = "change";
       rerender();
     });
   }
 
   for (const el of document.querySelectorAll("[data-open-file]")) {
     el.addEventListener("click", () => {
-      state.selectedArtifactPath = el.dataset.openFile;
+      state.selectedArtifactPath = decodeURIComponent(el.dataset.openFile || "");
       state.readerMode = "story";
+      state.readerFocus = "file";
       rerender();
     });
   }
@@ -472,6 +666,7 @@ function bindDynamicEvents() {
 
   const leftSelect = document.getElementById("leftSelect");
   const rightSelect = document.getElementById("rightSelect");
+  const compareSwapBtn = document.getElementById("compareSwapBtn");
   if (leftSelect && rightSelect) {
     leftSelect.addEventListener("change", () => {
       state.compareLeftPath = leftSelect.value;
@@ -482,40 +677,99 @@ function bindDynamicEvents() {
       rerender();
     });
   }
+  if (compareSwapBtn) {
+    compareSwapBtn.addEventListener("click", () => {
+      const temp = state.compareLeftPath;
+      state.compareLeftPath = state.compareRightPath;
+      state.compareRightPath = temp;
+      rerender();
+    });
+  }
 }
 
-async function refreshIndex(workspaceId = null) {
-  await api("/api/workspaces/refresh", {
-    method: "POST",
-    body: JSON.stringify({ workspaceId }),
-  });
-  await loadIndex();
-}
-
-async function loadIndex() {
-  const [indexData, runtimeData] = await Promise.all([api("/api/index"), api("/api/runtime/status")]);
+async function loadDashboard() {
+  const [indexData, runtimeData, syncData, timelineData] = await Promise.all([
+    api("/api/index"),
+    api("/api/runtime/status"),
+    api("/api/sync/status"),
+    api("/api/timeline?limit=120"),
+  ]);
   state.index = indexData;
   state.runtime = runtimeData;
+  state.sync = syncData.sync || { status: "idle", message: "等待同步操作" };
+  state.timeline = timelineData.events || syncData.recentEvents || [];
   await rerender();
 }
 
+async function guarded(action, options = {}) {
+  try {
+    await action();
+  } catch (error) {
+    const message = options.messagePrefix ? `${options.messagePrefix}：${error.message}` : error.message;
+    els.readerContent.innerHTML = `<p class="muted">${escapeHtml(message)}</p>`;
+    state.sync = {
+      status: "failed",
+      message,
+      summary: null,
+    };
+    renderSyncState();
+  }
+}
+
+async function runSync(payload, pendingMessage) {
+  state.sync = {
+    status: "syncing",
+    message: pendingMessage,
+    summary: null,
+  };
+  renderSyncState();
+
+  await api("/api/sync", {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+  await loadDashboard();
+}
+
 function bindStaticEvents() {
+  els.brandLogo.addEventListener("load", () => {
+    els.brandLogo.parentElement.classList.add("has-logo");
+  });
+  els.brandLogo.addEventListener("error", () => {
+    els.brandLogo.parentElement.classList.remove("has-logo");
+  });
+
+  els.navSearchInput.addEventListener("input", () => {
+    state.navQuery = els.navSearchInput.value;
+    rerender();
+  });
+
   els.workspaceSelect.addEventListener("change", () => {
     state.selectedWorkspaceId = els.workspaceSelect.value;
     state.selectedChangeId = null;
     state.selectedArtifactPath = null;
     state.compareLeftPath = null;
     state.compareRightPath = null;
+    state.readerFocus = "change";
     rerender();
   });
 
   els.modeCardsBtn.addEventListener("click", () => {
     state.navMode = "cards";
+    state.readerFocus = "change";
     rerender();
   });
 
   els.modeFilesBtn.addEventListener("click", () => {
     state.navMode = "files";
+    if (state.readerFocus !== "file") {
+      const ws = getSelectedWorkspace();
+      if (ws?.files?.length > 0) {
+        state.selectedArtifactPath = ws.files[0].relativePath;
+      }
+    }
+    state.readerFocus = "file";
+    state.readerMode = "story";
     rerender();
   });
 
@@ -526,52 +780,67 @@ function bindStaticEvents() {
 
   els.viewCompareBtn.addEventListener("click", () => {
     state.readerMode = "compare";
+    state.readerFocus = "change";
     rerender();
   });
 
+  els.syncAddBtn.addEventListener("click", async () => {
+    const targetPath = els.addWorkspacePath.value.trim();
+    const label = els.addWorkspaceLabel.value.trim();
+    if (!targetPath) return;
+
+    await guarded(async () => {
+      await runSync({ path: targetPath, label: label || undefined }, "正在添加并同步工作区...");
+      els.addWorkspacePath.value = "";
+      els.addWorkspaceLabel.value = "";
+    }, { messagePrefix: "添加并刷新失败" });
+  });
+
+  els.refreshWorkspaceBtn.addEventListener("click", async () => {
+    if (!state.selectedWorkspaceId) return;
+    await guarded(async () => {
+      await runSync({ workspaceId: state.selectedWorkspaceId }, "正在刷新当前工作区...");
+    }, { messagePrefix: "刷新当前工作区失败" });
+  });
+
   els.refreshAllBtn.addEventListener("click", async () => {
-    await refreshIndex();
+    await guarded(async () => {
+      await runSync({}, "正在刷新全部工作区...");
+    }, { messagePrefix: "刷新全部工作区失败" });
   });
 
   els.removeWorkspaceBtn.addEventListener("click", async () => {
     if (!state.selectedWorkspaceId) return;
-    await api(`/api/workspaces/${encodeURIComponent(state.selectedWorkspaceId)}`, { method: "DELETE" });
-    state.selectedWorkspaceId = null;
-    state.selectedChangeId = null;
-    state.selectedArtifactPath = null;
-    await loadIndex();
+    await guarded(async () => {
+      await api(`/api/workspaces/${encodeURIComponent(state.selectedWorkspaceId)}`, { method: "DELETE" });
+      state.selectedWorkspaceId = null;
+      state.selectedChangeId = null;
+      state.selectedArtifactPath = null;
+      await loadDashboard();
+    }, { messagePrefix: "解绑失败" });
   });
 
   els.clearWorkspacesBtn.addEventListener("click", async () => {
-    if (!confirm("Clear all linked workspaces?")) return;
-    await api("/api/workspaces", { method: "DELETE" });
-    state.selectedWorkspaceId = null;
-    state.selectedChangeId = null;
-    state.selectedArtifactPath = null;
-    await loadIndex();
+    if (!confirm("确认清空所有已绑定工作区？")) return;
+    await guarded(async () => {
+      await api("/api/workspaces", { method: "DELETE" });
+      state.selectedWorkspaceId = null;
+      state.selectedChangeId = null;
+      state.selectedArtifactPath = null;
+      await loadDashboard();
+    }, { messagePrefix: "清空工作区失败" });
   });
 
   els.stopServiceBtn.addEventListener("click", async () => {
-    if (!confirm("Stop spec-readr web service now?")) return;
-    await api("/api/runtime/stop", { method: "POST", body: JSON.stringify({}) });
-    els.runtimeMeta.textContent = "Service: stopping...";
-  });
-
-  els.addWorkspaceBtn.addEventListener("click", async () => {
-    const targetPath = els.addWorkspacePath.value.trim();
-    const label = els.addWorkspaceLabel.value.trim();
-    if (!targetPath) return;
-    await api("/api/workspaces", {
-      method: "POST",
-      body: JSON.stringify({ path: targetPath, label: label || undefined }),
-    });
-    els.addWorkspacePath.value = "";
-    els.addWorkspaceLabel.value = "";
-    await loadIndex();
+    if (!confirm("确认停止 spec-readr 服务？")) return;
+    await guarded(async () => {
+      await api("/api/runtime/stop", { method: "POST", body: JSON.stringify({}) });
+      els.runtimeMeta.textContent = "服务状态：正在停止...";
+    }, { messagePrefix: "停止服务失败" });
   });
 }
 
 bindStaticEvents();
-loadIndex().catch((error) => {
-  els.readerContent.innerHTML = `<p class="muted">Failed to load: ${escapeHtml(error.message)}</p>`;
+loadDashboard().catch((error) => {
+  els.readerContent.innerHTML = `<p class="muted">加载失败：${escapeHtml(error.message)}</p>`;
 });

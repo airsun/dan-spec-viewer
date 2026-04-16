@@ -21,3 +21,13 @@ The system SHALL provide a global capability overview for all currently bound wo
 - **WHEN** the user opens global capability view
 - **THEN** the system MUST present capabilities grouped by workspace and show their latest related change context.
 
+### Requirement: Capability and Change Timeline Visibility
+The web application SHALL provide timeline views to show recent evolution of capabilities and changes.
+
+#### Scenario: View capability timeline
+- **WHEN** the user selects a capability in the lens
+- **THEN** the system MUST show recent related change events in reverse chronological order.
+
+#### Scenario: View workspace change timeline
+- **WHEN** the user browses current workspace context
+- **THEN** the system MUST expose recent change updates with timestamps and event types.

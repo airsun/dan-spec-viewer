@@ -61,6 +61,15 @@ spec-readr up
 
 目录要求：目标路径下存在 `openspec/`。
 
+### 4) Web 内继续操作（推荐）
+
+进入页面后，日常操作集中在 **Sync Center**：
+
+- `添加并刷新`：绑定新 workspace 并立即索引
+- `刷新当前`：只刷新选中的 workspace
+- `刷新全部`：刷新所有已绑定 workspace
+- 状态条会显示 `空闲 / 同步中 / 成功 / 失败` 与最近摘要
+
 ## 安装与构建
 
 ### 环境要求
@@ -139,6 +148,19 @@ node ./src/cli.js web
 spec-readr --help
 ```
 
+### 更新后是否需要重新执行 `npm link`
+
+分两种情况：
+
+- **你是 `npm link` 开发态安装**：通常不需要重跑。`spec-readr` 会直接指向当前源码目录，代码改动会立即生效。
+- **你是全局安装（`npm i -g ...`）**：需要重新执行安装命令来升级版本。
+
+建议仅在以下情况重新执行 `npm link`：
+
+- 首次安装或你执行过 `npm unlink -g spec-readr`
+- `package.json` 的 `name/bin` 配置发生变化
+- 你切换到另一个仓库目录，希望命令改为指向新目录
+
 ### 卸载
 
 ```bash
@@ -209,21 +231,29 @@ readr ...
 - `Spec Cards`：按 Change 队列进入审阅（默认）
 - `File Browser`：按文件路径直接浏览
 
-### 顶栏操作闭环
+### Sync Center（主操作区）
 
-- `Unbind Workspace`：取消当前 workspace link
-- `Unbind All`：清空全部 linked workspaces
-- `Stop Service`：停止当前 spec-readr web 进程
-- 页面会显示当前 Service 状态（running/stopped）
+- `添加并刷新`：输入 workspace 路径（可选 label）后一次完成 bind + refresh
+- `刷新当前`：针对当前下拉选中的 workspace 做增量同步
+- `刷新全部`：全量同步所有已绑定 workspace
+- 同步状态会显示结果摘要（变更数、能力数、文件数等）
+
+### 低频操作（工作区卡片折叠区）
+
+- `解绑当前工作区`：取消当前 workspace link
+- `清空所有工作区`：清空全部 linked workspaces
+- `停止服务`：停止当前 spec-readr web 进程
+- 页面会显示服务状态（running/stopped）
 
 ### 中栏：Review Reader
 
-- `Story`：串读 Change Pack（proposal → design → tasks → spec）
-- `Compare`：并排对照两个 artifact
+- `串读`：按 Change Pack 顺序阅读（proposal → design → tasks → spec）
+- `并排`：并排对照两个 artifact
 
 ### 右栏：Capability Lens
 
 - 当前 Change 的 impacted capabilities
+- capability/change 的时间线事件（同步、变更新增/更新等）
 - 跨 workspace 的 capability 全局概览
 
 ## 数据与状态
